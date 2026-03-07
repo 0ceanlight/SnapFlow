@@ -1,0 +1,394 @@
+import SwiftUI
+import EventKit
+import AppKit
+import Combine
+
+// MARK: - Blur background
+
+struct VisualEffectBlur: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .hudWindow
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material; v.blendingMode = blendingMode; v.state = .active
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        v.material = material; v.blendingMode = blendingMode
+    }
+}
+
+// MARK: - RulerHUDView
+
+struct RulerHUDView: View {
+    @ObservedObject var calendarManager = CalendarManager.shared
+    @State private var isHovering = false
+    @State private var now = Date()
+
+    let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    // ─── Shared geometry constants ─────────────────────────────
+    /// Both collapsed and expanded views use this: 1 pt == 1 minute.
+    /// Midnight = y:0, end-of-day = y:1440.
+    static let pxPerMin: CGFloat     = 1.0
+    static let canvasHeight: CGFloat = 24 * 60 * pxPerMin  // 1440
+    /// Right inset applied to both grid lines and event blocks for visual breathing room.
+    static let rightMargin: CGFloat  = 10
+
+    let collapsedWidth: CGFloat = 10
+    let expandedWidth:  CGFloat = 250
+    let timeGutterW:    CGFloat = 44   // left gutter for hour labels
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Shared blur background (visible in expanded mode; almost invisible at 10pt)
+            if isHovering {
+                VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+            } else {
+                Color.clear
+            }
+
+            // ONE scrollable canvas for both states
+            sharedScrollCanvas()
+        }
+        .frame(width: isHovering ? expandedWidth : collapsedWidth)
+        .frame(maxHeight: .infinity)
+        .cornerRadius(isHovering ? 12 : 0, corners: [.topRight, .bottomRight])
+        // Subtle 1px border — matches macOS panel style
+        .overlay(
+            RoundedCorner(radius: isHovering ? 12 : 0, corners: [.topRight, .bottomRight])
+                .stroke(Color.white.opacity(isHovering ? 0.15 : 0), lineWidth: 1)
+        )
+        .shadow(radius: isHovering ? 8 : 0)
+        .onHover { hovering in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                isHovering = hovering
+            }
+        }
+        .onReceive(timer) { _ in now = Date() }
+        .onCommand(#selector(NSResponder.moveUp(_:)))   { nudgeActive(by: +5) }
+        .onCommand(#selector(NSResponder.moveDown(_:))) { nudgeActive(by: -5) }
+        .focusable(true)
+    }
+
+    // MARK: - Shared scroll canvas (same coordinate system always)
+
+    @ViewBuilder
+    private func sharedScrollCanvas() -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                ZStack(alignment: .topLeading) {
+
+                    // ── Collapsed: thin gray bar (full width of the 10pt strip) ──
+                    if !isHovering {
+                        Color.gray.opacity(0.30)
+                    }
+
+                    // ── Expanded: timeline grid ───────────────────────────────
+                    if isHovering {
+                        timelineGrid()
+                    }
+
+                    // ── Events — same y-positions in both modes ───────────────
+                    eventsLayer()
+
+                    // ── Now line ──────────────────────────────────────────────
+                    nowLine()
+                        .id("nowLine")
+
+                    // ── Expanded tip ──────────────────────────────────────────
+                    if isHovering {
+                        Text("↑ +5m  ·  ↓ -5m")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(6)
+                            .offset(y: Self.canvasHeight - 20)
+                    }
+                }
+                .frame(width: isHovering ? expandedWidth : collapsedWidth,
+                       height: Self.canvasHeight)
+            }
+            .onAppear { proxy.scrollTo("nowLine", anchor: .center) }
+            .onChange(of: isHovering) { _, newVal in
+                if newVal { withAnimation { proxy.scrollTo("nowLine", anchor: .center) } }
+            }
+        }
+    }
+
+    // MARK: - Timeline grid (expanded only)
+
+    private func timelineGrid() -> some View {
+        Canvas { ctx, size in
+            for hour in 0..<24 {
+                for min in stride(from: 0, to: 60, by: 15) {
+                    let y = CGFloat(hour * 60 + min) * RulerHUDView.pxPerMin
+                    var p = Path()
+                    p.move(to: CGPoint(x: timeGutterW, y: y))
+                    p.addLine(to: CGPoint(x: size.width - RulerHUDView.rightMargin, y: y))
+                    let isHour = min == 0
+                    ctx.stroke(p, with: .color(isHour ? .gray.opacity(0.45) : .gray.opacity(0.18)),
+                               lineWidth: isHour ? 1 : 0.5)
+                    if isHour {
+                        let label = String(format: "%02d:00", hour)
+                        ctx.draw(Text(label).font(.caption2).foregroundColor(.gray),
+                                 at: CGPoint(x: timeGutterW / 2, y: y + 2), anchor: .top)
+                    }
+                }
+            }
+        }
+        .frame(height: Self.canvasHeight)
+    }
+
+    // MARK: - Events layer
+
+    @ViewBuilder
+    private func eventsLayer() -> some View {
+        let todayStart = Calendar.current.startOfDay(for: now)
+        GeometryReader { geo in
+            ForEach(calendarManager.events, id: \.eventIdentifier) { event in
+                let startMin = CGFloat(event.startDate.timeIntervalSince(todayStart) / 60)
+                let endMin   = CGFloat(event.endDate.timeIntervalSince(todayStart) / 60)
+
+                // Only render events that fall within today's 0–1440 range
+                if startMin < 1440 && endMin > 0 {
+                    let yStart = max(startMin, 0) * RulerHUDView.pxPerMin
+                    let yEnd   = min(endMin, 1440) * RulerHUDView.pxPerMin
+                    let color  = eventColor(event)
+
+                    if isHovering {
+                        // ── Expanded: full interactive block ──────────────────
+                        InteractiveEventBlock(
+                            event: event,
+                            todayStart: todayStart,
+                            containerWidth: geo.size.width,
+                            pxPerMin: RulerHUDView.pxPerMin,
+                            color: color,
+                            onOpenCalendar: { openInCalendar(event) },
+                            onCommit: { ns, ne in
+                                calendarManager.rescheduleEvent(event: event, newStart: ns, newEnd: ne)
+                            }
+                        )
+                    } else {
+                        // ── Collapsed: thin colored bar, same y coords ────────
+                        color
+                            .opacity(0.85)
+                            .frame(width: collapsedWidth, height: max(2, yEnd - yStart))
+                            .offset(y: yStart)
+                            .contentShape(Rectangle())
+                            .onTapGesture { openInCalendar(event) }
+                    }
+                }
+            }
+        }
+        .frame(height: Self.canvasHeight)
+    }
+
+    // MARK: - Now line
+
+    private func nowLine() -> some View {
+        let todayStart = Calendar.current.startOfDay(for: now)
+        let y = CGFloat(now.timeIntervalSince(todayStart) / 60) * RulerHUDView.pxPerMin
+        return Group {
+            if isHovering {
+                HStack(spacing: 2) {
+                    Text("Now").font(.caption2).bold().foregroundColor(.red).frame(width: timeGutterW - 4)
+                    Rectangle().fill(Color.red).frame(height: 2)
+                }
+            } else {
+                Rectangle().fill(Color.white).frame(width: collapsedWidth, height: 2)
+            }
+        }
+        .offset(y: y)
+    }
+
+    // MARK: - Pastel palette
+
+    private static let palette: [Color] = [
+        Color(hue: 0.60, saturation: 0.55, brightness: 0.90),  // sky blue
+        Color(hue: 0.08, saturation: 0.60, brightness: 0.92),  // peach
+        Color(hue: 0.38, saturation: 0.50, brightness: 0.82),  // sage green
+        Color(hue: 0.75, saturation: 0.50, brightness: 0.88),  // soft lavender
+        Color(hue: 0.14, saturation: 0.55, brightness: 0.92),  // warm gold
+        Color(hue: 0.50, saturation: 0.48, brightness: 0.84),  // teal
+        Color(hue: 0.93, saturation: 0.50, brightness: 0.90),  // rose
+        Color(hue: 0.28, saturation: 0.45, brightness: 0.84),  // lime
+        Color(hue: 0.02, saturation: 0.55, brightness: 0.88),  // coral
+        Color(hue: 0.68, saturation: 0.45, brightness: 0.86),  // periwinkle
+    ]
+
+    /// Greedy graph-coloring: no two overlapping or immediately adjacent events
+    /// share the same palette color.
+    private var eventColorMap: [String: Color] {
+        let sorted = calendarManager.events.sorted { $0.startDate < $1.startDate }
+        var assignedIdx: [String: Int] = [:]
+
+        for event in sorted {
+            // Collect palette indices already used by conflicting neighbors
+            let usedIdxs: Set<Int> = Set(sorted.compactMap { other -> Int? in
+                guard other.eventIdentifier != event.eventIdentifier,
+                      let idx = assignedIdx[other.eventIdentifier] else { return nil }
+                let overlaps  = other.startDate < event.endDate && other.endDate > event.startDate
+                let adjacentA = abs(other.endDate.timeIntervalSince(event.startDate)) < 60
+                let adjacentB = abs(event.endDate.timeIntervalSince(other.startDate)) < 60
+                return (overlaps || adjacentA || adjacentB) ? idx : nil
+            })
+
+            // Shuffle the free slots using a seed derived from this event's identifier,
+            // so the pick is random across the palette but deterministic per event.
+            let freeIdxs = (0..<Self.palette.count).filter { !usedIdxs.contains($0) }
+            var rng = SeededRNG(seed: abs(event.eventIdentifier.hashValue))
+            let chosen = freeIdxs.shuffled(using: &rng).first
+                      ?? abs(event.eventIdentifier.hashValue) % Self.palette.count
+            assignedIdx[event.eventIdentifier] = chosen
+        }
+
+        return assignedIdx.mapValues { Self.palette[$0] }
+    }
+
+    private func eventColor(_ event: EKEvent) -> Color {
+        eventColorMap[event.eventIdentifier] ?? Self.palette[0]
+    }
+
+    private func openInCalendar(_ event: EKEvent) {
+        let identifier = event.calendarItemIdentifier
+        guard !identifier.isEmpty,
+              let url = URL(string: "ical://ekevent/\(identifier)") else {
+            print("SnapFocus: could not construct Calendar URL for event \(event.title ?? "unknown")")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func nudgeActive(by minutes: Int) {
+        let n = Date()
+        guard let ev = calendarManager.events.first(where: { $0.startDate <= n && $0.endDate >= n }) else { return }
+        calendarManager.nudgeEvent(event: ev, byMinutes: minutes)
+    }
+}
+
+// MARK: - InteractiveEventBlock
+
+struct InteractiveEventBlock: View {
+    let event: EKEvent
+    let todayStart: Date
+    let containerWidth: CGFloat
+    let pxPerMin: CGFloat
+    let color: Color
+    let onOpenCalendar: () -> Void
+    let onCommit: (Date, Date) -> Void
+
+    @State private var moveOffset:   CGFloat = 0  // pts (move drag)
+    @State private var resizeOffset: CGFloat = 0  // pts (bottom-edge drag)
+    @State private var isDragging = false
+
+    private let edgeHandleH: CGFloat = 10
+    private let leftInset:   CGFloat = 46
+
+    var body: some View {
+        let startMins    = CGFloat(event.startDate.timeIntervalSince(todayStart) / 60)
+        let durationMins = CGFloat(event.endDate.timeIntervalSince(event.startDate) / 60)
+        let blockH       = max(durationMins * pxPerMin + resizeOffset, 14)
+        let yOffset      = startMins * pxPerMin + moveOffset
+        let width        = containerWidth - leftInset - RulerHUDView.rightMargin
+
+        ZStack(alignment: .bottom) {
+            // Body
+            RoundedRectangle(cornerRadius: 5)
+                .fill(color.opacity(isDragging ? 0.92 : 0.72))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(color, lineWidth: 1))
+                .overlay(alignment: .topLeading) {
+                    Text(event.title ?? "")
+                        .font(.caption).bold().foregroundColor(.white).lineLimit(2)
+                        .padding(.horizontal, 5).padding(.top, 3)
+                }
+                .highPriorityGesture(DragGesture(minimumDistance: 2)
+                    .onChanged { v in
+                        isDragging = true
+                        // Track raw pixel delta — 1pt == 1min so this is 1:1 with the mouse
+                        moveOffset = v.translation.height
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        // Snap to nearest 5-min only on release
+                        let snappedMins = snapToFive(moveOffset / pxPerMin)
+                        let delta = TimeInterval(snappedMins * 60)
+                        let ns = event.startDate.addingTimeInterval(delta)
+                        let ne = event.endDate.addingTimeInterval(delta)
+                        moveOffset = 0
+                        onCommit(ns, ne)
+                    }
+                )
+                .onTapGesture { onOpenCalendar() }
+
+            // Bottom resize handle
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.white.opacity(0.4))
+                .frame(width: 28, height: 4)
+                .padding(.bottom, 3)
+                .contentShape(Rectangle().size(width: width, height: edgeHandleH))
+                .highPriorityGesture(DragGesture(minimumDistance: 2)
+                    .onChanged { v in
+                        isDragging = true
+                        // Raw pixel tracking — clamp so block can't shrink below 5 min
+                        resizeOffset = max(-(durationMins - 5) * pxPerMin, v.translation.height)
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        // Snap to nearest 5-min only on release
+                        let snappedMins = snapToFive(resizeOffset / pxPerMin)
+                        let ne = event.endDate.addingTimeInterval(TimeInterval(snappedMins * 60))
+                        resizeOffset = 0
+                        onCommit(event.startDate, ne)
+                    }
+                )
+        }
+        .frame(width: width, height: blockH)
+        .offset(x: leftInset, y: yOffset)
+        .shadow(color: color.opacity(isDragging ? 0.5 : 0), radius: 6)
+    }
+
+    private func snapToFive(_ mins: CGFloat) -> CGFloat {
+        (mins / 5).rounded() * 5
+    }
+}
+
+// MARK: - Corner radius helpers
+
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: RectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RectCorner: OptionSet {
+    let rawValue: Int
+    static let topLeft     = RectCorner(rawValue: 1 << 0)
+    static let topRight    = RectCorner(rawValue: 1 << 1)
+    static let bottomLeft  = RectCorner(rawValue: 1 << 2)
+    static let bottomRight = RectCorner(rawValue: 1 << 3)
+    static let allCorners: RectCorner = [.topLeft, .topRight, .bottomLeft, .bottomRight]
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: RectCorner = .allCorners
+    func path(in rect: CGRect) -> Path {
+        Path(NSBezierPath(roundedRect: NSRect(origin: rect.origin, size: rect.size),
+                          xRadius: radius, yRadius: radius).cgPath)
+    }
+}
+
+// MARK: - Seeded RNG (linear congruential generator)
+// Deterministic per event: same seed → same shuffle → same color every render.
+struct SeededRNG: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: Int) {
+        // Mix the seed to avoid poor low-bit distributions
+        state = UInt64(bitPattern: Int64(seed)) ^ 6364136223846793005
+    }
+    mutating func next() -> UInt64 {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        return state
+    }
+}
+
