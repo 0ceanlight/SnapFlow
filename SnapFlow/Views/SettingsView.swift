@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("gemini_api_key") private var storedGeminiAPIKey: String = ""
     @AppStorage("default_input_mode") private var defaultInputMode: String = "voice"
     @AppStorage("snapping_enabled")   private var snappingEnabled: Bool = true
+    @AppStorage("todo_enabled")       private var todoEnabled: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -73,10 +74,26 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            Divider()
+
+            // ── TODO Panel ────────────────────────────────────────
+            VStack(alignment: .leading, spacing: 6) {
+                Text("TODO Panel")
+                    .font(.headline)
+
+                Toggle("Show TODO panel for active event", isOn: $todoEnabled)
+                    .toggleStyle(.switch)
+
+                Text("When hovering the top half of the Ruler HUD, a TODO panel appears above the timeline showing checklist items from the active event's notes (lines starting with - [ ] or - [x]).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 350)
+        .frame(width: 380, height: 440)
     }
 
     private func saveAPIKey() {

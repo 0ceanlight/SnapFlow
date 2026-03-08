@@ -2,6 +2,14 @@ import Foundation
 import EventKit
 import Combine
 
+// MARK: - TodoItem
+
+struct TodoItem: Identifiable, Equatable {
+    var id = UUID()
+    var text: String
+    var isCompleted: Bool
+}
+
 @MainActor
 class CalendarManager: ObservableObject {
     static let shared = CalendarManager()
@@ -11,6 +19,7 @@ class CalendarManager: ObservableObject {
     
     @Published var events: [EKEvent] = []
     @Published var isAuthorized: Bool = false
+    @Published var activeEvent: EKEvent? = nil
     
     private var cancellables = Set<AnyCancellable>()
     private var refreshTimer: Timer?
@@ -110,6 +119,45 @@ class CalendarManager: ObservableObject {
 
         let predicate = store.predicateForEvents(withStart: dayStart, end: dayEnd, calendars: [calendar])
         self.events   = store.events(matching: predicate).sorted { $0.startDate < $1.startDate }
+        let now2 = Date()
+        self.activeEvent = self.events.first(where: { $0.startDate <= now2 && $0.endDate >= now2 })
+    }
+
+    // MARK: - TODO helpers
+
+    /// Parse `- [ ]` / `- [x]` lines from an event's notes.
+    static func parseTodos(from notes: String) -> [TodoItem] {
+        notes.components(separatedBy: "\n").compactMap { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("- [ ] ") {
+                return TodoItem(text: String(trimmed.dropFirst(6)), isCompleted: false)
+            } else if trimmed.hasPrefix("- [x] ") {
+                return TodoItem(text: String(trimmed.dropFirst(6)), isCompleted: true)
+            }
+            return nil
+        }
+    }
+
+    /// Rebuild the notes string with updated todos, preserving non-todo lines.
+    func saveTodos(_ todos: [TodoItem], to event: EKEvent) {
+        let existing = event.notes ?? ""
+        // Keep lines that are NOT todo lines
+        let nonTodoLines = existing
+            .components(separatedBy: "\n")
+            .filter { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return !t.hasPrefix("- [ ] ") && !t.hasPrefix("- [x] ")
+            }
+        // Rebuild: non-todo lines first, then todos
+        let todoLines = todos.map { ($0.isCompleted ? "- [x] " : "- [ ] ") + $0.text }
+        let allLines  = nonTodoLines + todoLines
+        event.notes   = allLines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try store.save(event, span: .thisEvent, commit: true)
+        } catch {
+            print("Failed to save todos: \(error)")
+        }
     }
     
     // Nudge the given event by `minutes`, shifting downstream connected events

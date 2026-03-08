@@ -24,6 +24,9 @@ struct RulerHUDView: View {
     @ObservedObject var calendarManager = CalendarManager.shared
     @State private var isHovering = false
     @State private var now = Date()
+    @State private var normalizedMouseY: CGFloat = 1.0  // 0=top, 1=bottom
+
+    @AppStorage("todo_enabled") private var todoEnabled: Bool = true
 
     let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -52,6 +55,29 @@ struct RulerHUDView: View {
 
             // ONE scrollable canvas for both states
             sharedScrollCanvas()
+
+            // ── Mouse position tracker (invisible, full size) ──────────────
+            if isHovering {
+                MousePositionProxy { y in normalizedMouseY = y }
+                    .allowsHitTesting(false)
+            }
+
+            // ── TODO panel (top-half hover only) ──────────────────────────
+            Group {
+                if isHovering && todoEnabled && normalizedMouseY <= 0.5 && calendarManager.activeEvent != nil {
+                    VStack {
+                        TodoPanelView()
+                        Spacer()
+                    }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal:   .opacity
+                    ))
+                }
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.75),
+                       value: isHovering && todoEnabled && normalizedMouseY <= 0.5 && calendarManager.activeEvent != nil)
+            .zIndex(10)
         }
         .frame(width: isHovering ? expandedWidth : collapsedWidth)
         .frame(maxHeight: .infinity)
@@ -457,4 +483,50 @@ struct SeededRNG: RandomNumberGenerator {
         return state
     }
 }
+
+// MARK: - MousePositionProxy
+// Transparent NSView that tracks the mouse Y position normalised to [0, 1]
+// (0 = top, 1 = bottom). Used to decide whether to show the TODO panel.
+
+struct MousePositionProxy: NSViewRepresentable {
+    var onNormalizedY: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> TrackingView {
+        let v = TrackingView()
+        v.onNormalizedY = onNormalizedY
+        return v
+    }
+
+    func updateNSView(_ v: TrackingView, context: Context) {
+        v.onNormalizedY = onNormalizedY
+    }
+
+    class TrackingView: NSView {
+        var onNormalizedY: ((CGFloat) -> Void)?
+        private var trackingArea: NSTrackingArea?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let old = trackingArea { removeTrackingArea(old) }
+            let area = NSTrackingArea(
+                rect: bounds,
+                options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                owner: self, userInfo: nil
+            )
+            addTrackingArea(area)
+            trackingArea = area
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            guard bounds.height > 0 else { return }
+            // Convert from window coords to view coords, then normalise
+            let pt = convert(event.locationInWindow, from: nil)
+            // NSView: y = 0 at bottom, flip to 0 at top
+            let fromTop = 1.0 - (pt.y / bounds.height)
+            let clamped  = max(0, min(1, fromTop))
+            onNormalizedY?(clamped)
+        }
+    }
+}
+
 
