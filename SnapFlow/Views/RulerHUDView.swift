@@ -40,6 +40,14 @@ struct RulerHUDView: View {
     /// Snap threshold: if an event edge is within this many minutes, it snaps to align.
     static let snapMarginMinutes: Double = 10
 
+    /// DST-safe: returns minutes since local midnight for positioning on the 0–1440 canvas.
+    /// Using dateComponents avoids the 1-hour error on DST transition days where midnight
+    /// and mid-day have different UTC offsets.
+    static func minutesFromMidnight(_ date: Date) -> CGFloat {
+        let c = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
+        return CGFloat((c.hour ?? 0) * 60 + (c.minute ?? 0)) + CGFloat(c.second ?? 0) / 60
+    }
+
     let collapsedWidth: CGFloat = 10
     let expandedWidth:  CGFloat = 250
     let timeGutterW:    CGFloat = 44   // left gutter for hour labels
@@ -174,8 +182,8 @@ struct RulerHUDView: View {
         let todayStart = Calendar.current.startOfDay(for: now)
         GeometryReader { geo in
             ForEach(calendarManager.events, id: \.eventIdentifier) { event in
-                let startMin = CGFloat(event.startDate.timeIntervalSince(todayStart) / 60)
-                let endMin   = CGFloat(event.endDate.timeIntervalSince(todayStart) / 60)
+                let startMin = Self.minutesFromMidnight(event.startDate)
+                let endMin   = Self.minutesFromMidnight(event.endDate)
 
                 // Only render events that fall within today's 0–1440 range
                 if startMin < 1440 && endMin > 0 {
@@ -216,7 +224,7 @@ struct RulerHUDView: View {
 
     private func nowLine() -> some View {
         let todayStart = Calendar.current.startOfDay(for: now)
-        let y = CGFloat(now.timeIntervalSince(todayStart) / 60) * RulerHUDView.pxPerMin
+        let y = RulerHUDView.minutesFromMidnight(now) * RulerHUDView.pxPerMin
         return Group {
             if isHovering {
                 HStack(spacing: 2) {
@@ -371,7 +379,7 @@ struct InteractiveEventBlock: View {
     }
 
     var body: some View {
-        let startMins    = CGFloat(event.startDate.timeIntervalSince(todayStart) / 60)
+        let startMins    = RulerHUDView.minutesFromMidnight(event.startDate)
         let durationMins = CGFloat(event.endDate.timeIntervalSince(event.startDate) / 60)
         let blockH       = max(durationMins * pxPerMin + resizeOffset, 14)
         let yOffset      = startMins * pxPerMin + moveOffset
