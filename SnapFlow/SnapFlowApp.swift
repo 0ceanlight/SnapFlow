@@ -130,7 +130,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openPreferences() {
         if preferencesWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 270),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 370),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false

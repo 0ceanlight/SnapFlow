@@ -6,6 +6,7 @@ struct SettingsView: View {
 
     @AppStorage("gemini_api_key") private var storedGeminiAPIKey: String = ""
     @AppStorage("default_input_mode") private var defaultInputMode: String = "voice"
+    @AppStorage("snapping_enabled")   private var snappingEnabled: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -56,10 +57,26 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            Divider()
+
+            // ── Snapping ──────────────────────────────────────────
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Enable Snapping")
+                    .font(.headline)
+
+                Toggle("Snap events to adjacent edges", isOn: $snappingEnabled)
+                    .toggleStyle(.switch)
+
+                Text("When dragging an event within \(Int(RulerHUDView.snapMarginMinutes)) minutes of another event's edge, it will snap to align automatically.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 250)
+        .frame(width: 380, height: 350)
     }
 
     private func saveAPIKey() {

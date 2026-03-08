@@ -30,10 +30,12 @@ struct RulerHUDView: View {
     // ─── Shared geometry constants ─────────────────────────────
     /// Both collapsed and expanded views use this: 1 pt == 1 minute.
     /// Midnight = y:0, end-of-day = y:1440.
-    static let pxPerMin: CGFloat     = 1.0
-    static let canvasHeight: CGFloat = 24 * 60 * pxPerMin  // 1440
+    static let pxPerMin: CGFloat      = 1.0
+    static let canvasHeight: CGFloat   = 24 * 60 * pxPerMin  // 1440
     /// Right inset applied to both grid lines and event blocks for visual breathing room.
-    static let rightMargin: CGFloat  = 10
+    static let rightMargin: CGFloat    = 10
+    /// Snap threshold: if an event edge is within this many minutes, it snaps to align.
+    static let snapMarginMinutes: Double = 10
 
     let collapsedWidth: CGFloat = 10
     let expandedWidth:  CGFloat = 250
@@ -163,6 +165,7 @@ struct RulerHUDView: View {
                             containerWidth: geo.size.width,
                             pxPerMin: RulerHUDView.pxPerMin,
                             color: color,
+                            allEvents: calendarManager.events,
                             onOpenCalendar: { openInCalendar(event) },
                             onCommit: { ns, ne in
                                 calendarManager.rescheduleEvent(event: event, newStart: ns, newEnd: ne)
@@ -274,15 +277,72 @@ struct InteractiveEventBlock: View {
     let containerWidth: CGFloat
     let pxPerMin: CGFloat
     let color: Color
+    let allEvents: [EKEvent]
     let onOpenCalendar: () -> Void
     let onCommit: (Date, Date) -> Void
 
-    @State private var moveOffset:   CGFloat = 0  // pts (move drag)
-    @State private var resizeOffset: CGFloat = 0  // pts (bottom-edge drag)
+    @AppStorage("snapping_enabled") private var snappingEnabled: Bool = true
+
+    @State private var moveOffset:   CGFloat = 0
+    @State private var resizeOffset: CGFloat = 0
     @State private var isDragging = false
 
     private let edgeHandleH: CGFloat = 10
     private let leftInset:   CGFloat = 46
+
+    // MARK: - Snap helpers
+
+    /// Snap a move-drag offset (pts) to nearby event edges. Returns the (possibly snapped) offset.
+    private func snappedMoveOffset(_ rawPts: CGFloat) -> CGFloat {
+        guard snappingEnabled else { return rawPts }
+        let rawSec    = TimeInterval(rawPts / pxPerMin * 60)
+        let candStart = event.startDate.addingTimeInterval(rawSec)
+        let candEnd   = event.endDate.addingTimeInterval(rawSec)
+        let threshold = TimeInterval(RulerHUDView.snapMarginMinutes * 60)
+        var bestDist  = threshold
+        var bestPts: CGFloat? = nil
+
+        for other in allEvents {
+            guard other.eventIdentifier != event.eventIdentifier else { continue }
+            // start → other.end  (B coalesces after A)
+            let d1 = abs(candStart.timeIntervalSince(other.endDate))
+            if d1 < bestDist { bestDist = d1; bestPts = CGFloat(other.endDate.timeIntervalSince(event.startDate) / 60) * pxPerMin }
+            // end → other.start  (B coalesces before C)
+            let d2 = abs(candEnd.timeIntervalSince(other.startDate))
+            if d2 < bestDist { bestDist = d2; bestPts = CGFloat(other.startDate.timeIntervalSince(event.endDate) / 60) * pxPerMin }
+        }
+        return bestPts ?? rawPts
+    }
+
+    /// Snap a resize offset (pts, end-edge only) to nearby event edges.
+    private func snappedResizeOffset(_ rawPts: CGFloat, durationMins: CGFloat) -> CGFloat {
+        guard snappingEnabled else { return rawPts }
+        let rawSec    = TimeInterval(rawPts / pxPerMin * 60)
+        let candEnd   = event.endDate.addingTimeInterval(rawSec)
+        let threshold = TimeInterval(RulerHUDView.snapMarginMinutes * 60)
+        let minDurSec = TimeInterval(5 * 60)
+        var bestDist  = threshold
+        var bestPts: CGFloat? = nil
+
+        for other in allEvents {
+            guard other.eventIdentifier != event.eventIdentifier else { continue }
+            // end → other.start
+            let d1 = abs(candEnd.timeIntervalSince(other.startDate))
+            let snapSec1 = other.startDate.timeIntervalSince(event.endDate)
+            if d1 < bestDist && event.endDate.timeIntervalSince(event.startDate) + snapSec1 >= minDurSec {
+                bestDist = d1; bestPts = CGFloat(snapSec1 / 60) * pxPerMin
+            }
+            // end → other.end
+            let d2 = abs(candEnd.timeIntervalSince(other.endDate))
+            let snapSec2 = other.endDate.timeIntervalSince(event.endDate)
+            if d2 < bestDist && event.endDate.timeIntervalSince(event.startDate) + snapSec2 >= minDurSec {
+                bestDist = d2; bestPts = CGFloat(snapSec2 / 60) * pxPerMin
+            }
+        }
+        // Clamp floor: never shrink below 5 min
+        let floor = -(durationMins - 5) * pxPerMin
+        return max(floor, bestPts ?? rawPts)
+    }
 
     var body: some View {
         let startMins    = CGFloat(event.startDate.timeIntervalSince(todayStart) / 60)
@@ -303,19 +363,21 @@ struct InteractiveEventBlock: View {
                 }
                 .highPriorityGesture(DragGesture(minimumDistance: 2)
                     .onChanged { v in
-                        isDragging = true
-                        // Track raw pixel delta — 1pt == 1min so this is 1:1 with the mouse
-                        moveOffset = v.translation.height
+                        withTransaction(Transaction(animation: nil)) {
+                            isDragging = true
+                            moveOffset = v.translation.height  // raw, no snap during drag
+                        }
                     }
-                    .onEnded { _ in
+                    .onEnded { v in
                         isDragging = false
-                        // Snap to nearest 5-min only on release
-                        let snappedMins = snapToFive(moveOffset / pxPerMin)
-                        let delta = TimeInterval(snappedMins * 60)
-                        let ns = event.startDate.addingTimeInterval(delta)
-                        let ne = event.endDate.addingTimeInterval(delta)
+                        let raw = v.translation.height
+                        let snapped = snappedMoveOffset(raw)
+                        let isEventSnapped = abs(snapped - raw) > 0.5
+                        let finalPts = isEventSnapped ? snapped : snapToFive(raw / pxPerMin) * pxPerMin
+                        let delta = TimeInterval(finalPts / pxPerMin * 60)
                         moveOffset = 0
-                        onCommit(ns, ne)
+                        onCommit(event.startDate.addingTimeInterval(delta),
+                                 event.endDate.addingTimeInterval(delta))
                     }
                 )
                 .onTapGesture { onOpenCalendar() }
@@ -328,17 +390,21 @@ struct InteractiveEventBlock: View {
                 .contentShape(Rectangle().size(width: width, height: edgeHandleH))
                 .highPriorityGesture(DragGesture(minimumDistance: 2)
                     .onChanged { v in
-                        isDragging = true
-                        // Raw pixel tracking — clamp so block can't shrink below 5 min
-                        resizeOffset = max(-(durationMins - 5) * pxPerMin, v.translation.height)
+                        withTransaction(Transaction(animation: nil)) {
+                            isDragging = true
+                            resizeOffset = max(-(durationMins - 5) * pxPerMin, v.translation.height)  // raw
+                        }
                     }
-                    .onEnded { _ in
+                    .onEnded { v in
                         isDragging = false
-                        // Snap to nearest 5-min only on release
-                        let snappedMins = snapToFive(resizeOffset / pxPerMin)
-                        let ne = event.endDate.addingTimeInterval(TimeInterval(snappedMins * 60))
+                        let raw = v.translation.height
+                        let snapped = snappedResizeOffset(raw, durationMins: durationMins)
+                        let isEventSnapped = abs(snapped - raw) > 0.5
+                        let finalPts = isEventSnapped ? snapped : max(-(durationMins - 5) * pxPerMin,
+                                                                      snapToFive(raw / pxPerMin) * pxPerMin)
+                        let delta = TimeInterval(finalPts / pxPerMin * 60)
                         resizeOffset = 0
-                        onCommit(event.startDate, ne)
+                        onCommit(event.startDate, event.endDate.addingTimeInterval(delta))
                     }
                 )
         }

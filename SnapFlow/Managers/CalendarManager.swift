@@ -13,16 +13,21 @@ class CalendarManager: ObservableObject {
     @Published var isAuthorized: Bool = false
     
     private var cancellables = Set<AnyCancellable>()
+    private var refreshTimer: Timer?
     
     private init() {
         checkPermissions()
         
         NotificationCenter.default.publisher(for: .EKEventStoreChanged)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.fetchEvents()
-            }
+            .sink { [weak self] _ in self?.fetchEvents() }
             .store(in: &cancellables)
+
+        // Periodic refresh so events stay visible after rapid saves that
+        // may not always fire EKEventStoreChanged fast enough.
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { self?.fetchEvents() }
+        }
     }
     
     func checkPermissions() {
@@ -96,15 +101,15 @@ class CalendarManager: ObservableObject {
     
     func fetchEvents() {
         guard let calendar = snapFocusCalendar, isAuthorized else { return }
-        
-        let now = Date()
-        let startDate = Calendar.current.date(byAdding: .hour, value: -12, to: now)!
-        let endDate = Calendar.current.date(byAdding: .hour, value: 12, to: now)!
-        
-        let predicate = store.predicateForEvents(withStart: startDate, end: endDate, calendars: [calendar])
-        let fetchedEvents = store.events(matching: predicate).sorted { $0.startDate < $1.startDate }
-        
-        self.events = fetchedEvents
+
+        // Fetch the entire current day so events stay visible after rescheduling,
+        // regardless of what the clock says (avoids the ±12h window edge problem).
+        let cal      = Calendar.current
+        let dayStart = cal.startOfDay(for: Date())
+        let dayEnd   = cal.date(byAdding: .day, value: 1, to: dayStart)!
+
+        let predicate = store.predicateForEvents(withStart: dayStart, end: dayEnd, calendars: [calendar])
+        self.events   = store.events(matching: predicate).sorted { $0.startDate < $1.startDate }
     }
     
     // Nudge the given event by `minutes`, shifting downstream connected events
