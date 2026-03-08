@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage("default_input_mode") private var defaultInputMode: String = "voice"
     @AppStorage("snapping_enabled")   private var snappingEnabled: Bool = true
     @AppStorage("todo_enabled")       private var todoEnabled: Bool = true
+    @AppStorage("todo_sort_checked")  private var sortChecked: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -84,7 +85,10 @@ struct SettingsView: View {
                 Toggle("Show TODO panel for active event", isOn: $todoEnabled)
                     .toggleStyle(.switch)
 
-                Text("When hovering the top half of the Ruler HUD, a TODO panel appears above the timeline showing checklist items from the active event's notes (lines starting with - [ ] or - [x]).")
+                Toggle("Sort checked items to bottom", isOn: $sortChecked)
+                    .toggleStyle(.switch)
+
+                Text("When hovering the top half of the Ruler HUD, a TODO panel appears above the timeline. Checked items animate to the bottom of the list when sorted.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -93,7 +97,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 440)
+        .frame(width: 380, height: 480)
     }
 
     private func saveAPIKey() {

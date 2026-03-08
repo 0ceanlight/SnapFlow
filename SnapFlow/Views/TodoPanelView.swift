@@ -8,6 +8,8 @@ struct TodoPanelView: View {
     @State private var todos: [TodoItem] = []
     @State private var editingID: UUID? = nil
 
+    @AppStorage("todo_sort_checked") private var sortChecked: Bool = true
+
     private var activeEvent: EKEvent? { calendarManager.activeEvent }
 
     var body: some View {
@@ -44,7 +46,7 @@ struct TodoPanelView: View {
                         TodoRowView(
                             item: $item,
                             isEditing: editingID == item.id,
-                            onToggle: { save() },
+                            onToggle: { sortAndSave() },
                             onEditBegin:  { editingID = item.id },
                             onEditCommit: { editingID = nil; save() },
                             onDelete: { delete(item) }
@@ -85,12 +87,30 @@ struct TodoPanelView: View {
 
     private func loadTodos() {
         guard let ev = activeEvent else { todos = []; return }
-        todos = CalendarManager.parseTodos(from: ev.notes ?? "")
+        let parsed = CalendarManager.parseTodos(from: ev.notes ?? "")
+        todos = sortChecked ? stableSorted(parsed) : parsed
     }
 
     private func save() {
         guard let ev = activeEvent else { return }
         calendarManager.saveTodos(todos, to: ev)
+    }
+
+    /// Sort then save — used on checkbox toggle so reorder animates.
+    private func sortAndSave() {
+        save()
+        if sortChecked {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                todos = stableSorted(todos)
+            }
+        }
+    }
+
+    /// Stable sort: preserve relative order within each group.
+    private func stableSorted(_ items: [TodoItem]) -> [TodoItem] {
+        let unchecked = items.filter { !$0.isCompleted }
+        let checked   = items.filter {  $0.isCompleted }
+        return unchecked + checked
     }
 
     private func addItem() {
