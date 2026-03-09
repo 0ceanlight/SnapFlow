@@ -26,7 +26,7 @@ class GeminiService: ObservableObject {
         let nowString = df.string(from: Date())
         
         let prompt = """
-        You are an intelligent scheduling assistant for macOS. The user will provide a natural language transcript of tasks.
+        You are an intelligent scheduling assistant. The user will provide a natural language transcript of tasks.
         Generate a strictly formatted JSON array of events starting from the current time. Do not overlap events.
         Format MUST strictly be exactly this JSON array with nothing else before or after: 
         [
@@ -34,9 +34,12 @@ class GeminiService: ObservableObject {
         ]
         
         Ensure you append a 🤖 emoji to the start of each title.
-        The current time is \(nowString).
+        The current time is \(nowString). If no specific start time is mentioned, start the schedule from the current time or the next logical slot (round to nearest 5 minutes). 
+        Ensure there are NO overlapping events.
+        Unless specified otherwise (e.g. with fixed start/end times or durations).
+        Also unless specified otherwise, make sure the schedule is gap-free such that the end time of one event is the start time of the next event.
         
-        Transcript: 
+        Here is the user request: 
         "\(transcript)"
         """
         
