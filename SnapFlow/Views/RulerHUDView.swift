@@ -167,7 +167,7 @@ struct RulerHUDView: View {
                     if isHour {
                         let label = String(format: "%02d:00", hour)
                         ctx.draw(Text(label).font(.caption2).foregroundColor(.gray),
-                                 at: CGPoint(x: timeGutterW / 2, y: y + 2), anchor: .top)
+                                 at: CGPoint(x: timeGutterW / 2, y: y), anchor: .center)
                     }
                 }
             }
@@ -223,7 +223,6 @@ struct RulerHUDView: View {
     // MARK: - Now line
 
     private func nowLine() -> some View {
-        let todayStart = Calendar.current.startOfDay(for: now)
         let y = RulerHUDView.minutesFromMidnight(now) * RulerHUDView.pxPerMin
         return Group {
             if isHovering {
@@ -231,6 +230,7 @@ struct RulerHUDView: View {
                     Text("Now").font(.caption2).bold().foregroundColor(.red).frame(width: timeGutterW - 4)
                     Rectangle().fill(Color.red).frame(height: 2)
                 }
+                .frame(height: 2)  // constrain layout height so offset lands on the line, not 7px below
             } else {
                 Rectangle().fill(Color.white).frame(width: collapsedWidth, height: 2)
             }
