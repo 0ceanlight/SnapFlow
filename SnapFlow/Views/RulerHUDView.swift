@@ -206,9 +206,6 @@ struct RulerHUDView: View {
                        height: canvasHeight)
             }
             .onAppear { proxy.scrollTo("nowLine", anchor: .center) }
-            .onChange(of: isHovering) { _, newVal in
-                if newVal { withAnimation { proxy.scrollTo("nowLine", anchor: .center) } }
-            }
         }
     }
 
