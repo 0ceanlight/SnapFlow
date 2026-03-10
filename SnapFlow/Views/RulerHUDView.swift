@@ -18,6 +18,56 @@ struct VisualEffectBlur: NSViewRepresentable {
     }
 }
 
+// MARK: - ScaleController
+
+/// Holds the vertical zoom level and owns the NSEvent key monitor.
+/// A class (ObservableObject) is used so the monitor closure can safely
+/// capture `self` by reference and mutate state without SwiftUI struct-copy issues.
+final class ScaleController: ObservableObject {
+    /// The default vertical scale (zoom level) on launch.
+    /// 1.0 = entire 24h day fits in view. Larger values = more zoomed in.
+    static let defaultScale: CGFloat = 1.5
+
+    @Published var scale: CGFloat = ScaleController.defaultScale
+
+    let min: CGFloat = 1.0   // whole 24h day fits in view
+    let max: CGFloat = 10.0
+    let step: CGFloat = 0.5
+
+    private var monitor: Any?
+
+    func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            let cmd = event.modifierFlags.contains(.command)
+            guard cmd else { return event }
+            let key = event.keyCode
+            let ch  = event.charactersIgnoringModifiers ?? ""
+            if ch == "+" || ch == "=" || key == 24 {   // Cmd+
+                DispatchQueue.main.async {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                        self.scale = Swift.min(self.max, self.scale + self.step)
+                    }
+                }
+                return nil
+            } else if ch == "-" || key == 27 {          // Cmd-
+                DispatchQueue.main.async {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                        self.scale = Swift.max(self.min, self.scale - self.step)
+                    }
+                }
+                return nil
+            }
+            return event
+        }
+    }
+
+    func remove() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+    }
+}
+
 // MARK: - RulerHUDView
 
 struct RulerHUDView: View {
@@ -26,15 +76,20 @@ struct RulerHUDView: View {
     @State private var now = Date()
     @State private var normalizedMouseY: CGFloat = 1.0  // 0=top, 1=bottom
 
+    /// Owns the vertical scale value and the Cmd+/Cmd- key monitor.
+    @StateObject private var scaleCtrl = ScaleController()
+
     @AppStorage("todo_enabled") private var todoEnabled: Bool = true
 
     let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
-    // ─── Shared geometry constants ─────────────────────────────
-    /// Both collapsed and expanded views use this: 1 pt == 1 minute.
-    /// Midnight = y:0, end-of-day = y:1440.
-    static let pxPerMin: CGFloat      = 1.0
-    static let canvasHeight: CGFloat   = 24 * 60 * pxPerMin  // 1440
+    // ─── Dynamic geometry (scale-aware) ──────────────────────────
+    /// Points per minute — varies with the shared scale controller.
+    var pxPerMin: CGFloat { scaleCtrl.scale }
+    /// Total canvas height for the 24-hour day.
+    var canvasHeight: CGFloat { 24 * 60 * pxPerMin }
+
+    // ─── Shared static constants ──────────────────────────────────
     /// Right inset applied to both grid lines and event blocks for visual breathing room.
     static let rightMargin: CGFloat    = 10
     /// Snap threshold: if an event edge is within this many minutes, it snaps to align.
@@ -100,12 +155,18 @@ struct RulerHUDView: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 isHovering = hovering
             }
+            if hovering {
+                scaleCtrl.install()
+            } else {
+                scaleCtrl.remove()
+            }
         }
         .onReceive(timer) { _ in now = Date() }
         .onCommand(#selector(NSResponder.moveUp(_:)))   { nudgeActive(by: +5) }
         .onCommand(#selector(NSResponder.moveDown(_:))) { nudgeActive(by: -5) }
         .focusable(true)
     }
+
 
     // MARK: - Shared scroll canvas (same coordinate system always)
 
@@ -138,11 +199,11 @@ struct RulerHUDView: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .padding(6)
-                            .offset(y: Self.canvasHeight - 20)
+                            .offset(y: canvasHeight - 20)
                     }
                 }
                 .frame(width: isHovering ? expandedWidth : collapsedWidth,
-                       height: Self.canvasHeight)
+                       height: canvasHeight)
             }
             .onAppear { proxy.scrollTo("nowLine", anchor: .center) }
             .onChange(of: isHovering) { _, newVal in
@@ -154,25 +215,32 @@ struct RulerHUDView: View {
     // MARK: - Timeline grid (expanded only)
 
     private func timelineGrid() -> some View {
-        Canvas { ctx, size in
+        // Capture scale so Canvas closure uses a value-type copy (avoids re-capture issues)
+        let scale = pxPerMin
+        let height = canvasHeight
+        let gutterW = timeGutterW
+        return Canvas { ctx, size in
             for hour in 0..<24 {
-                for min in stride(from: 0, to: 60, by: 15) {
-                    let y = CGFloat(hour * 60 + min) * RulerHUDView.pxPerMin
+                // Only draw 15-min sub-lines when zoomed in enough to show them clearly
+                let subStep = scale >= 1.5 ? 15 : 60
+                for min in stride(from: 0, to: 60, by: subStep) {
+                    let y = CGFloat(hour * 60 + min) * scale
                     var p = Path()
-                    p.move(to: CGPoint(x: timeGutterW, y: y))
+                    p.move(to: CGPoint(x: gutterW, y: y))
                     p.addLine(to: CGPoint(x: size.width - RulerHUDView.rightMargin, y: y))
                     let isHour = min == 0
                     ctx.stroke(p, with: .color(isHour ? .gray.opacity(0.45) : .gray.opacity(0.18)),
                                lineWidth: isHour ? 1 : 0.5)
                     if isHour {
                         let label = String(format: "%02d:00", hour)
+                        // Fixed font size — labels never scale with zoom
                         ctx.draw(Text(label).font(.caption2).foregroundColor(.gray),
-                                 at: CGPoint(x: timeGutterW / 2, y: y), anchor: .center)
+                                 at: CGPoint(x: gutterW / 2, y: y), anchor: .center)
                     }
                 }
             }
         }
-        .frame(height: Self.canvasHeight)
+        .frame(height: height)
     }
 
     // MARK: - Events layer
@@ -180,6 +248,8 @@ struct RulerHUDView: View {
     @ViewBuilder
     private func eventsLayer() -> some View {
         let todayStart = Calendar.current.startOfDay(for: now)
+        let scale = pxPerMin
+        let height = canvasHeight
         GeometryReader { geo in
             ForEach(calendarManager.events, id: \.eventIdentifier) { event in
                 let startMin = Self.minutesFromMidnight(event.startDate)
@@ -187,8 +257,8 @@ struct RulerHUDView: View {
 
                 // Only render events that fall within today's 0–1440 range
                 if startMin < 1440 && endMin > 0 {
-                    let yStart = max(startMin, 0) * RulerHUDView.pxPerMin
-                    let yEnd   = min(endMin, 1440) * RulerHUDView.pxPerMin
+                    let yStart = max(startMin, 0) * scale
+                    let yEnd   = min(endMin, 1440) * scale
                     let color  = eventColor(event)
 
                     if isHovering {
@@ -197,7 +267,7 @@ struct RulerHUDView: View {
                             event: event,
                             todayStart: todayStart,
                             containerWidth: geo.size.width,
-                            pxPerMin: RulerHUDView.pxPerMin,
+                            pxPerMin: scale,
                             color: color,
                             allEvents: calendarManager.events,
                             onOpenCalendar: { openInCalendar(event) },
@@ -217,16 +287,17 @@ struct RulerHUDView: View {
                 }
             }
         }
-        .frame(height: Self.canvasHeight)
+        .frame(height: height)
     }
 
     // MARK: - Now line
 
     private func nowLine() -> some View {
-        let y = RulerHUDView.minutesFromMidnight(now) * RulerHUDView.pxPerMin
+        let y = RulerHUDView.minutesFromMidnight(now) * pxPerMin
         return Group {
             if isHovering {
                 HStack(spacing: 2) {
+                    // Fixed font — label never scales with zoom
                     Text("Now").font(.caption2).bold().foregroundColor(.red).frame(width: timeGutterW - 4)
                     Rectangle().fill(Color.red).frame(height: 2)
                 }
