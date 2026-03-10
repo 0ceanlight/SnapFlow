@@ -76,6 +76,11 @@ struct RulerHUDView: View {
     @State private var now = Date()
     @State private var normalizedMouseY: CGFloat = 1.0  // 0=top, 1=bottom
 
+    @State private var selectedEventIDs: Set<String> = []
+    @State private var lastExtractedEventID: String? = nil
+    @State private var dragSelectRect: CGRect? = nil
+    @State private var groupDragDelta: CGFloat = 0
+
     /// Owns the vertical scale value and the Cmd+/Cmd- key monitor.
     @StateObject private var scaleCtrl = ScaleController()
 
@@ -184,10 +189,55 @@ struct RulerHUDView: View {
                     // ── Expanded: timeline grid ───────────────────────────────
                     if isHovering {
                         timelineGrid()
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedEventIDs.removeAll()
+                                lastExtractedEventID = nil
+                            }
+                            .gesture(
+                                DragGesture(minimumDistance: 2)
+                                    .onChanged { v in
+                                        let y0 = v.startLocation.y
+                                        let y1 = v.location.y
+                                        let x0 = v.startLocation.x
+                                        let x1 = v.location.x
+                                        dragSelectRect = CGRect(x: min(x0, x1), y: min(y0, y1), width: abs(x1 - x0), height: abs(y1 - y0))
+                                    }
+                                    .onEnded { v in
+                                        guard let rect = dragSelectRect else { return }
+                                        var newSelections: Set<String> = []
+                                        for event in calendarManager.events {
+                                            let startMins = RulerHUDView.minutesFromMidnight(event.startDate)
+                                            let endMins = RulerHUDView.minutesFromMidnight(event.endDate)
+                                            let yStart = max(startMins, 0) * pxPerMin
+                                            let yEnd = min(endMins, 1440) * pxPerMin
+                                            
+                                            if rect.minY < yEnd && rect.maxY > yStart {
+                                                newSelections.insert(event.eventIdentifier)
+                                            }
+                                        }
+                                        if !newSelections.isEmpty {
+                                            selectedEventIDs = newSelections
+                                        } else {
+                                            selectedEventIDs.removeAll()
+                                        }
+                                        dragSelectRect = nil
+                                        lastExtractedEventID = nil
+                                    }
+                            )
                     }
 
                     // ── Events — same y-positions in both modes ───────────────
                     eventsLayer()
+                    
+                    // ── Drag Selection Rect ───────────────────────────────────
+                    if let rect = dragSelectRect, isHovering {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.gray.opacity(0.15))
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.gray.opacity(0.4), lineWidth: 1))
+                            .frame(width: rect.width, height: rect.height)
+                            .offset(x: rect.minX, y: rect.minY)
+                    }
 
                     // ── Now line ──────────────────────────────────────────────
                     nowLine()
@@ -267,9 +317,21 @@ struct RulerHUDView: View {
                             pxPerMin: scale,
                             color: color,
                             allEvents: calendarManager.events,
-                            onOpenCalendar: { openInCalendar(event) },
+                            isSelected: selectedEventIDs.contains(event.eventIdentifier),
+                            selectedEventIDs: selectedEventIDs,
+                            getIsSelected: { selectedEventIDs.contains(event.eventIdentifier) },
+                            onDoubleTap: { openInCalendar(event) },
+                            onTap: { modifiers in handleEventTap(event: event, modifiers: modifiers) },
+                            onDragStartUnselected: {
+                                selectedEventIDs = [event.eventIdentifier]
+                                lastExtractedEventID = event.eventIdentifier
+                            },
+                            groupDragDelta: $groupDragDelta,
                             onCommit: { ns, ne in
                                 calendarManager.rescheduleEvent(event: event, newStart: ns, newEnd: ne)
+                            },
+                            onCommitGroup: { delta in
+                                calendarManager.moveEvents(eventIDs: selectedEventIDs, delta: delta)
                             }
                         )
                     } else {
@@ -369,6 +431,30 @@ struct RulerHUDView: View {
         guard let ev = calendarManager.events.first(where: { $0.startDate <= n && $0.endDate >= n }) else { return }
         calendarManager.nudgeEvent(event: ev, byMinutes: minutes)
     }
+
+    private func handleEventTap(event: EKEvent, modifiers: NSEvent.ModifierFlags) {
+        if modifiers.contains(.command) {
+            if selectedEventIDs.contains(event.eventIdentifier) {
+                selectedEventIDs.remove(event.eventIdentifier)
+            } else {
+                selectedEventIDs.insert(event.eventIdentifier)
+            }
+            lastExtractedEventID = event.eventIdentifier
+        } else if modifiers.contains(.shift), let lastID = lastExtractedEventID, let lastEvent = calendarManager.events.first(where: { $0.eventIdentifier == lastID }) {
+            let rangeStart = min(lastEvent.startDate, event.startDate)
+            let rangeEnd = max(lastEvent.endDate, event.endDate)
+            
+            for e in calendarManager.events {
+                if e.startDate < rangeEnd && e.endDate > rangeStart {
+                    selectedEventIDs.insert(e.eventIdentifier)
+                }
+            }
+            lastExtractedEventID = event.eventIdentifier
+        } else {
+            selectedEventIDs = [event.eventIdentifier]
+            lastExtractedEventID = event.eventIdentifier
+        }
+    }
 }
 
 // MARK: - InteractiveEventBlock
@@ -380,8 +466,19 @@ struct InteractiveEventBlock: View {
     let pxPerMin: CGFloat
     let color: Color
     let allEvents: [EKEvent]
-    let onOpenCalendar: () -> Void
+    
+    let isSelected: Bool
+    let selectedEventIDs: Set<String>
+    let getIsSelected: () -> Bool
+    
+    let onDoubleTap: () -> Void
+    let onTap: (NSEvent.ModifierFlags) -> Void
+    let onDragStartUnselected: () -> Void
+    
+    @Binding var groupDragDelta: CGFloat
+    
     let onCommit: (Date, Date) -> Void
+    let onCommitGroup: (TimeInterval) -> Void
 
     @AppStorage("snapping_enabled") private var snappingEnabled: Bool = true
 
@@ -406,6 +503,8 @@ struct InteractiveEventBlock: View {
 
         for other in allEvents {
             guard other.eventIdentifier != event.eventIdentifier else { continue }
+            if isSelected && selectedEventIDs.contains(other.eventIdentifier) { continue }
+            
             // start → other.end  (B coalesces after A)
             let d1 = abs(candStart.timeIntervalSince(other.endDate))
             if d1 < bestDist { bestDist = d1; bestPts = CGFloat(other.endDate.timeIntervalSince(event.startDate) / 60) * pxPerMin }
@@ -450,14 +549,14 @@ struct InteractiveEventBlock: View {
         let startMins    = RulerHUDView.minutesFromMidnight(event.startDate)
         let durationMins = CGFloat(event.endDate.timeIntervalSince(event.startDate) / 60)
         let blockH       = max(durationMins * pxPerMin + resizeOffset, 14)
-        let yOffset      = startMins * pxPerMin + moveOffset
+        let yOffset      = startMins * pxPerMin + (isSelected ? groupDragDelta : moveOffset)
         let width        = containerWidth - leftInset - RulerHUDView.rightMargin
 
         ZStack(alignment: .bottom) {
             // Body
             RoundedRectangle(cornerRadius: 5)
                 .fill(color.opacity(isDragging ? 0.92 : 0.72))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(color, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(isSelected ? Color.primary.opacity(0.8) : color, lineWidth: isSelected ? 2 : 1))
                 .overlay(alignment: .topLeading) {
                     Text(event.title ?? "")
                         .font(.caption).bold().foregroundColor(.white).lineLimit(2)
@@ -467,7 +566,10 @@ struct InteractiveEventBlock: View {
                     .onChanged { v in
                         withTransaction(Transaction(animation: nil)) {
                             isDragging = true
-                            moveOffset = v.translation.height  // raw, no snap during drag
+                            if !getIsSelected() {
+                                onDragStartUnselected()
+                            }
+                            groupDragDelta = v.translation.height
                         }
                     }
                     .onEnded { v in
@@ -477,12 +579,19 @@ struct InteractiveEventBlock: View {
                         let isEventSnapped = abs(snapped - raw) > 0.5
                         let finalPts = isEventSnapped ? snapped : snapToFive(raw / pxPerMin) * pxPerMin
                         let delta = TimeInterval(finalPts / pxPerMin * 60)
-                        moveOffset = 0
-                        onCommit(event.startDate.addingTimeInterval(delta),
-                                 event.endDate.addingTimeInterval(delta))
+                        
+                        if getIsSelected() {
+                            groupDragDelta = 0
+                            onCommitGroup(delta)
+                        } else {
+                            moveOffset = 0
+                            onCommit(event.startDate.addingTimeInterval(delta),
+                                     event.endDate.addingTimeInterval(delta))
+                        }
                     }
                 )
-                .onTapGesture { onOpenCalendar() }
+                .onTapGesture(count: 2) { onDoubleTap() }
+                .onTapGesture(count: 1) { onTap(NSEvent.modifierFlags) }
 
             // Bottom resize handle
             RoundedRectangle(cornerRadius: 3)

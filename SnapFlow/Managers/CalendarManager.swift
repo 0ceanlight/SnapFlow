@@ -244,5 +244,31 @@ class CalendarManager: ObservableObject {
             fetchEvents()
         }
     }
+
+    // Batch move events
+    func moveEvents(eventIDs: Set<String>, delta: TimeInterval) {
+        var modifiedEvents: [EKEvent] = []
+        
+        for id in eventIDs {
+            if let event = events.first(where: { $0.eventIdentifier == id }) {
+                event.startDate = event.startDate.addingTimeInterval(delta)
+                event.endDate = event.endDate.addingTimeInterval(delta)
+                modifiedEvents.append(event)
+            }
+        }
+        
+        guard !modifiedEvents.isEmpty else { return }
+        
+        do {
+            for e in modifiedEvents {
+                try store.save(e, span: .thisEvent, commit: false)
+            }
+            try store.commit()
+            // Data will be reloaded implicitly by EKEventStoreChanged notification
+        } catch {
+            print("Failed to save batched events: \(error)")
+            fetchEvents()
+        }
+    }
 }
 
