@@ -486,6 +486,14 @@ struct InteractiveEventBlock: View {
     @State private var resizeOffset: CGFloat = 0
     @State private var isDragging = false
 
+    // MARK: - Design Tweaks
+    // Modifiable variables for the event selection styling
+    private let unselectedOpacity: Double = 0.45
+    private let selectedOpacity: Double   = 1.0
+    private let selectedBrightnessDelta: Double = 0.001
+    private let selectedSaturationDelta: Double = 0.15
+    private let unselectedTitleBrightnessDelta: Double = 0.8
+
     private let edgeHandleH: CGFloat = 10
     private let leftInset:   CGFloat = 46
 
@@ -555,12 +563,14 @@ struct InteractiveEventBlock: View {
         ZStack(alignment: .bottom) {
             // Body
             RoundedRectangle(cornerRadius: 5)
-                .fill(color.opacity(isDragging ? 0.92 : 0.72))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(isSelected ? Color.primary.opacity(0.8) : color, lineWidth: isSelected ? 2 : 1))
+                .fill(isSelected ? color.adjusted(saturationDelta: selectedSaturationDelta, brightnessDelta: selectedBrightnessDelta).opacity(selectedOpacity) : color.opacity(isDragging ? selectedOpacity : unselectedOpacity))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(color.opacity(isSelected ? 0.0 : 0.5), lineWidth: 1))
                 .overlay(alignment: .topLeading) {
                     Text(event.title ?? "")
-                        .font(.caption).bold().foregroundColor(.white).lineLimit(2)
-                        .padding(.horizontal, 5).padding(.top, 3)
+                        .font(.caption).bold()
+                        .foregroundColor(isSelected ? .white : color.adjusted(brightnessDelta: unselectedTitleBrightnessDelta))
+                        .lineLimit(2)
+                        .padding(.horizontal, 7).padding(.top, 3)
                 }
                 .highPriorityGesture(DragGesture(minimumDistance: 2)
                     .onChanged { v in
@@ -711,6 +721,23 @@ struct MousePositionProxy: NSViewRepresentable {
             let clamped  = max(0, min(1, fromTop))
             onNormalizedY?(clamped)
         }
+    }
+}
+
+// MARK: - Color Adjustment
+
+extension Color {
+    func adjusted(saturationDelta: Double = 0, brightnessDelta: Double = 0) -> Color {
+        let nsColor = NSColor(self)
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        nsColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        
+        return Color(
+            hue: Double(h),
+            saturation: max(0, min(1, Double(s) + saturationDelta)),
+            brightness: max(0, min(1, Double(b) + brightnessDelta)),
+            opacity: Double(a)
+        )
     }
 }
 
