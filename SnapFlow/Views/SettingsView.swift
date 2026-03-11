@@ -97,7 +97,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 480)
+        .frame(width: 380, height: 530)
     }
 
     private func saveAPIKey() {
