@@ -148,8 +148,9 @@ class CalendarManager: ObservableObject {
                 let t = line.trimmingCharacters(in: .whitespaces)
                 return !t.hasPrefix("- [ ] ") && !t.hasPrefix("- [x] ")
             }
-        // Rebuild: non-todo lines first, then todos
-        let todoLines = todos.map { ($0.isCompleted ? "- [x] " : "- [ ] ") + $0.text }
+        // Rebuild: non-todo lines first, then only valid todos
+        let validTodos = todos.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let todoLines = validTodos.map { ($0.isCompleted ? "- [x] " : "- [ ] ") + $0.text }
         let allLines  = nonTodoLines + todoLines
         event.notes   = allLines.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
