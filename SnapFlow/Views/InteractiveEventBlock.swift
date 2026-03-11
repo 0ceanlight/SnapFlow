@@ -26,10 +26,13 @@ struct InteractiveEventBlock: View {
     let onCommitGroup: (TimeInterval) -> Void
 
     @AppStorage("snapping_enabled") private var snappingEnabled: Bool = true
+    @AppStorage("hover_show_times") private var hoverShowTimes: Bool = true
+    @AppStorage("hover_show_notes") private var hoverShowNotes: Bool = true
 
     @State private var moveOffset:   CGFloat = 0
     @State private var resizeOffset: CGFloat = 0
     @State private var isDragging = false
+    @State private var isHoveringEvent = false
 
     // MARK: - Design Tweaks
     // Modifiable variables for the event selection styling
@@ -98,6 +101,17 @@ struct InteractiveEventBlock: View {
         return max(floor, bestPts ?? rawPts)
     }
 
+    private var showPopover: Binding<Bool> {
+        Binding(
+            get: {
+                if !isHoveringEvent { return false }
+                let hasNotes = event.notes != nil && !event.notes!.isEmpty
+                return hoverShowTimes || (hoverShowNotes && hasNotes)
+            },
+            set: { isHoveringEvent = $0 }
+        )
+    }
+
     var body: some View {
         let startMins    = RulerHUDView.minutesFromMidnight(event.startDate)
         let durationMins = CGFloat(event.endDate.timeIntervalSince(event.startDate) / 60)
@@ -145,6 +159,12 @@ struct InteractiveEventBlock: View {
                         }
                     }
                 )
+                .onHover { hovering in
+                    isHoveringEvent = hovering
+                }
+                .popover(isPresented: showPopover, attachmentAnchor: .point(.trailing), arrowEdge: .trailing) {
+                    EventHoverPopover(event: event, showTimes: hoverShowTimes, showNotes: hoverShowNotes)
+                }
                 .onTapGesture(count: 2) { onDoubleTap() }
                 .onTapGesture(count: 1) { onTap(NSEvent.modifierFlags) }
 
@@ -181,5 +201,30 @@ struct InteractiveEventBlock: View {
 
     private func snapToFive(_ mins: CGFloat) -> CGFloat {
         (mins / 5).rounded() * 5
+    }
+}
+
+// MARK: - EventHoverPopover
+
+struct EventHoverPopover: View {
+    let event: EKEvent
+    let showTimes: Bool
+    let showNotes: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showTimes {
+                Text("\(event.startDate.formatted(date: .omitted, time: .shortened)) - \(event.endDate.formatted(date: .omitted, time: .shortened))")
+                    .font(.headline)
+            }
+            if showNotes, let notes = event.notes, !notes.isEmpty {
+                Text(notes)
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding()
+        .frame(maxWidth: 300)
     }
 }

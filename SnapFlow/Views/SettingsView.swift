@@ -9,6 +9,8 @@ struct SettingsView: View {
     @AppStorage("snapping_enabled")   private var snappingEnabled: Bool = true
     @AppStorage("todo_enabled")       private var todoEnabled: Bool = true
     @AppStorage("todo_sort_checked")  private var sortChecked: Bool = true
+    @AppStorage("hover_show_times")   private var hoverShowTimes: Bool = true
+    @AppStorage("hover_show_notes")   private var hoverShowNotes: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -77,6 +79,25 @@ struct SettingsView: View {
 
             Divider()
 
+            // ── Event Hover Popup ──────────────────────────────────
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Event Hover Popup")
+                    .font(.headline)
+
+                Toggle("Show start and end times", isOn: $hoverShowTimes)
+                    .toggleStyle(.switch)
+
+                Toggle("Show event notes", isOn: $hoverShowNotes)
+                    .toggleStyle(.switch)
+
+                Text("When hovering over an event in the expanded timeline, a popup will display these details.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
             // ── TODO Panel ────────────────────────────────────────
             VStack(alignment: .leading, spacing: 6) {
                 Text("TODO Panel")
@@ -97,7 +118,8 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 530)
+        .frame(width: 380)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func saveAPIKey() {
