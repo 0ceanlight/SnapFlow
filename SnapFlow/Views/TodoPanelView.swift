@@ -1,5 +1,6 @@
 import SwiftUI
 import EventKit
+import Combine
 
 // MARK: - TodoPanelView
 
@@ -11,6 +12,12 @@ struct TodoPanelView: View {
     @AppStorage("todo_sort_checked") private var sortChecked: Bool = true
 
     private var activeEvent: EKEvent? { calendarManager.activeEvent }
+    
+    // Ignore internal reloads if we're actively editing so we don't drop keystrokes
+    // when our own saves bounce back from the store.
+    private var isActivelyEditing: Bool {
+        editingID != nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,8 +55,16 @@ struct TodoPanelView: View {
                             isEditing: editingID == item.id,
                             onToggle: { sortAndSave() },
                             onEditBegin:  { editingID = item.id },
-                            onEditCommit: { editingID = nil; save() },
-                            onDelete: { delete(item) }
+                            onEditCommit: { 
+                                editingID = nil
+                                if item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    delete(item)
+                                } else {
+                                    save() 
+                                }
+                            },
+                            onDelete: { delete(item) },
+                            onTextChange: { save() }
                         )
                     }
                 }
@@ -73,13 +88,15 @@ struct TodoPanelView: View {
             NotificationCenter.default.publisher(for: .EKEventStoreChanged)
         ) { _ in
             // Slight delay so EventKit finishes flushing the updated event
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { loadTodos() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { 
+                if !isActivelyEditing { loadTodos() }
+            }
         }
         .onChange(of: calendarManager.activeEvent?.calendarItemIdentifier) { _, _ in
             loadTodos()
         }
         .onChange(of: calendarManager.activeEvent?.notes) { _, _ in
-            loadTodos()
+            if !isActivelyEditing { loadTodos() }
         }
     }
 
@@ -117,7 +134,8 @@ struct TodoPanelView: View {
         let item = TodoItem(text: "", isCompleted: false)
         todos.append(item)
         editingID = item.id
-        // Don't save yet — save on commit so the EKEvent doesn't get a blank line
+        // Save immediately so that if an EKEventStore notification triggers a reload, this blank item isn't wiped out.
+        save()
     }
 
     private func delete(_ item: TodoItem) {
@@ -135,11 +153,15 @@ private struct TodoRowView: View {
     let onEditBegin:  () -> Void
     let onEditCommit: () -> Void
     let onDelete:     () -> Void
+    let onTextChange: () -> Void
 
     @State private var isHovering   = false
     @State private var checkScale: CGFloat  = 1.0
     @State private var checkOpacity: Double = 1.0
     @FocusState private var fieldFocused: Bool
+    
+    // Combine debouncer for continuous typing saves
+    @StateObject private var debouncer = TextDebouncer()
 
     var body: some View {
         HStack(spacing: 8) {
@@ -183,6 +205,12 @@ private struct TodoRowView: View {
                         .focused($fieldFocused)
                         .onSubmit { onEditCommit() }
                         .onAppear { fieldFocused = true }
+                        .onChange(of: item.text) { _, newValue in
+                            debouncer.text = newValue
+                        }
+                        .onReceive(debouncer.$debouncedText) { _ in
+                            onTextChange()
+                        }
                         .onChange(of: fieldFocused) { _, val in
                             if !val { onEditCommit() }
                         }
@@ -238,5 +266,24 @@ private struct TodoRowView: View {
         }
         item.isCompleted.toggle()
         onToggle()
+    }
+}
+
+// MARK: - TextDebouncer
+
+class TextDebouncer: ObservableObject {
+    @Published var text: String = ""
+    @Published var debouncedText: String = ""
+    
+    private var bag = Set<AnyCancellable>()
+    
+    public init() {
+        $text
+            .removeDuplicates()
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] val in
+                self?.debouncedText = val
+            }
+            .store(in: &bag)
     }
 }
