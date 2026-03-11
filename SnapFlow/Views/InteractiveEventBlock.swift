@@ -1,0 +1,185 @@
+import SwiftUI
+import EventKit
+import AppKit
+
+// MARK: - InteractiveEventBlock
+
+struct InteractiveEventBlock: View {
+    let event: EKEvent
+    let todayStart: Date
+    let containerWidth: CGFloat
+    let pxPerMin: CGFloat
+    let color: Color
+    let allEvents: [EKEvent]
+    
+    let isSelected: Bool
+    let selectedEventIDs: Set<String>
+    let getIsSelected: () -> Bool
+    
+    let onDoubleTap: () -> Void
+    let onTap: (NSEvent.ModifierFlags) -> Void
+    let onDragStartUnselected: () -> Void
+    
+    @Binding var groupDragDelta: CGFloat
+    
+    let onCommit: (Date, Date) -> Void
+    let onCommitGroup: (TimeInterval) -> Void
+
+    @AppStorage("snapping_enabled") private var snappingEnabled: Bool = true
+
+    @State private var moveOffset:   CGFloat = 0
+    @State private var resizeOffset: CGFloat = 0
+    @State private var isDragging = false
+
+    // MARK: - Design Tweaks
+    // Modifiable variables for the event selection styling
+    private let unselectedOpacity: Double = 0.45
+    private let selectedOpacity: Double   = 1.0
+    private let selectedBrightnessDelta: Double = 0.001
+    private let selectedSaturationDelta: Double = 0.15
+    private let unselectedTitleBrightnessDelta: Double = 0.8
+
+    private let edgeHandleH: CGFloat = 10
+    private let leftInset:   CGFloat = 46
+
+    // MARK: - Snap helpers
+
+    /// Snap a move-drag offset (pts) to nearby event edges. Returns the (possibly snapped) offset.
+    private func snappedMoveOffset(_ rawPts: CGFloat) -> CGFloat {
+        guard snappingEnabled else { return rawPts }
+        let rawSec    = TimeInterval(rawPts / pxPerMin * 60)
+        let candStart = event.startDate.addingTimeInterval(rawSec)
+        let candEnd   = event.endDate.addingTimeInterval(rawSec)
+        let threshold = TimeInterval(RulerHUDView.snapMarginMinutes * 60)
+        var bestDist  = threshold
+        var bestPts: CGFloat? = nil
+
+        for other in allEvents {
+            guard other.eventIdentifier != event.eventIdentifier else { continue }
+            if isSelected && selectedEventIDs.contains(other.eventIdentifier) { continue }
+            
+            // start → other.end  (B coalesces after A)
+            let d1 = abs(candStart.timeIntervalSince(other.endDate))
+            if d1 < bestDist { bestDist = d1; bestPts = CGFloat(other.endDate.timeIntervalSince(event.startDate) / 60) * pxPerMin }
+            // end → other.start  (B coalesces before C)
+            let d2 = abs(candEnd.timeIntervalSince(other.startDate))
+            if d2 < bestDist { bestDist = d2; bestPts = CGFloat(other.startDate.timeIntervalSince(event.endDate) / 60) * pxPerMin }
+        }
+        return bestPts ?? rawPts
+    }
+
+    /// Snap a resize offset (pts, end-edge only) to nearby event edges.
+    private func snappedResizeOffset(_ rawPts: CGFloat, durationMins: CGFloat) -> CGFloat {
+        guard snappingEnabled else { return rawPts }
+        let rawSec    = TimeInterval(rawPts / pxPerMin * 60)
+        let candEnd   = event.endDate.addingTimeInterval(rawSec)
+        let threshold = TimeInterval(RulerHUDView.snapMarginMinutes * 60)
+        let minDurSec = TimeInterval(5 * 60)
+        var bestDist  = threshold
+        var bestPts: CGFloat? = nil
+
+        for other in allEvents {
+            guard other.eventIdentifier != event.eventIdentifier else { continue }
+            // end → other.start
+            let d1 = abs(candEnd.timeIntervalSince(other.startDate))
+            let snapSec1 = other.startDate.timeIntervalSince(event.endDate)
+            if d1 < bestDist && event.endDate.timeIntervalSince(event.startDate) + snapSec1 >= minDurSec {
+                bestDist = d1; bestPts = CGFloat(snapSec1 / 60) * pxPerMin
+            }
+            // end → other.end
+            let d2 = abs(candEnd.timeIntervalSince(other.endDate))
+            let snapSec2 = other.endDate.timeIntervalSince(event.endDate)
+            if d2 < bestDist && event.endDate.timeIntervalSince(event.startDate) + snapSec2 >= minDurSec {
+                bestDist = d2; bestPts = CGFloat(snapSec2 / 60) * pxPerMin
+            }
+        }
+        // Clamp floor: never shrink below 5 min
+        let floor = -(durationMins - 5) * pxPerMin
+        return max(floor, bestPts ?? rawPts)
+    }
+
+    var body: some View {
+        let startMins    = RulerHUDView.minutesFromMidnight(event.startDate)
+        let durationMins = CGFloat(event.endDate.timeIntervalSince(event.startDate) / 60)
+        let blockH       = max(durationMins * pxPerMin + resizeOffset, 14)
+        let yOffset      = startMins * pxPerMin + (isSelected ? groupDragDelta : moveOffset)
+        let width        = containerWidth - leftInset - RulerHUDView.rightMargin
+
+        ZStack(alignment: .bottom) {
+            // Body
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isSelected ? color.adjusted(saturationDelta: selectedSaturationDelta, brightnessDelta: selectedBrightnessDelta).opacity(selectedOpacity) : color.opacity(isDragging ? selectedOpacity : unselectedOpacity))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(color.opacity(isSelected ? 0.0 : 0.5), lineWidth: 1))
+                .overlay(alignment: .topLeading) {
+                    Text(event.title ?? "")
+                        .font(.caption).bold()
+                        .foregroundColor(isSelected ? .white : color.adjusted(brightnessDelta: unselectedTitleBrightnessDelta))
+                        .lineLimit(2)
+                        .padding(.horizontal, 7).padding(.top, 3)
+                }
+                .highPriorityGesture(DragGesture(minimumDistance: 2)
+                    .onChanged { v in
+                        withTransaction(Transaction(animation: nil)) {
+                            isDragging = true
+                            if !getIsSelected() {
+                                onDragStartUnselected()
+                            }
+                            groupDragDelta = v.translation.height
+                        }
+                    }
+                    .onEnded { v in
+                        isDragging = false
+                        let raw = v.translation.height
+                        let snapped = snappedMoveOffset(raw)
+                        let isEventSnapped = abs(snapped - raw) > 0.5
+                        let finalPts = isEventSnapped ? snapped : snapToFive(raw / pxPerMin) * pxPerMin
+                        let delta = TimeInterval(finalPts / pxPerMin * 60)
+                        
+                        if getIsSelected() {
+                            groupDragDelta = 0
+                            onCommitGroup(delta)
+                        } else {
+                            moveOffset = 0
+                            onCommit(event.startDate.addingTimeInterval(delta),
+                                     event.endDate.addingTimeInterval(delta))
+                        }
+                    }
+                )
+                .onTapGesture(count: 2) { onDoubleTap() }
+                .onTapGesture(count: 1) { onTap(NSEvent.modifierFlags) }
+
+            // Bottom resize handle
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.white.opacity(0.4))
+                .frame(width: 28, height: 4)
+                .padding(.bottom, 3)
+                .contentShape(Rectangle().size(width: width, height: edgeHandleH))
+                .highPriorityGesture(DragGesture(minimumDistance: 2)
+                    .onChanged { v in
+                        withTransaction(Transaction(animation: nil)) {
+                            isDragging = true
+                            resizeOffset = max(-(durationMins - 5) * pxPerMin, v.translation.height)  // raw
+                        }
+                    }
+                    .onEnded { v in
+                        isDragging = false
+                        let raw = v.translation.height
+                        let snapped = snappedResizeOffset(raw, durationMins: durationMins)
+                        let isEventSnapped = abs(snapped - raw) > 0.5
+                        let finalPts = isEventSnapped ? snapped : max(-(durationMins - 5) * pxPerMin,
+                                                                      snapToFive(raw / pxPerMin) * pxPerMin)
+                        let delta = TimeInterval(finalPts / pxPerMin * 60)
+                        resizeOffset = 0
+                        onCommit(event.startDate, event.endDate.addingTimeInterval(delta))
+                    }
+                )
+        }
+        .frame(width: width, height: blockH)
+        .offset(x: leftInset, y: yOffset)
+        .shadow(color: color.opacity(isDragging ? 0.5 : 0), radius: 6)
+    }
+
+    private func snapToFive(_ mins: CGFloat) -> CGFloat {
+        (mins / 5).rounded() * 5
+    }
+}
