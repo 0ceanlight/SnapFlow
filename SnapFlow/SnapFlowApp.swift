@@ -20,10 +20,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         // Setup global hotkey
+        HotKeyManager.shared.onToggleRuler = { [weak self] in
+            self?.toggleRuler()
+        }
+        HotKeyManager.shared.onOpenSettings = { [weak self] in
+            // This is handled by SwiftUI observer now, but we keep the logic here for the menu item
+            // or we delegate it to the MenuBarExtra buttons.
+        }
         HotKeyManager.shared.setupHotkey()
-
-        // Setup menu bar status icon
-        setupStatusItem()
 
         // Setup Ruler HUD panel — 250 wide (expanded), positioned flush to left edge
         let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
@@ -56,72 +60,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
-    private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-
-        if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "bolt.horizontal.fill", accessibilityDescription: "SnapFocus")
-            button.toolTip = "SnapFocus"
-        }
-
-        statusItem?.menu = buildMenu()
-    }
-
-    private func buildMenu() -> NSMenu {
-        let menu = NSMenu()
-
-        // Toggle Scheduler header (non-functional label)
-        let header = NSMenuItem(title: "SnapFocus", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-        menu.addItem(.separator())
-
-        // Toggle Voice Orb / Scheduler
-        let orbItem = NSMenuItem(
-            title: "Toggle AI Scheduler",
-            action: #selector(toggleOrb),
-            keyEquivalent: "S"
-        )
-        orbItem.keyEquivalentModifierMask = [.command, .shift]
-        orbItem.image = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)
-        orbItem.target = self
-        menu.addItem(orbItem)
-
-        // Toggle Ruler HUD visibility
-        let rulerItem = NSMenuItem(
-            title: "Show/Hide Ruler HUD",
-            action: #selector(toggleRuler),
-            keyEquivalent: "H"
-        )
-        rulerItem.keyEquivalentModifierMask = [.command, .shift]
-        rulerItem.target = self
-        menu.addItem(rulerItem)
-
-        menu.addItem(.separator())
-
-        // Settings
-        let prefsItem = NSMenuItem(
-            title: "Settings ...",
-            action: #selector(openPreferences),
-            keyEquivalent: ","
-        )
-        prefsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
-        prefsItem.target = self
-        menu.addItem(prefsItem)
-
-        menu.addItem(.separator())
-
-        // Quit
-        menu.addItem(NSMenuItem(title: "Quit SnapFocus", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-
-        return menu
-    }
-
-    @objc private func toggleOrb() {
+    @objc func toggleOrb() {
         HotKeyManager.shared.toggleVoiceOrb()
     }
 
-    @objc private func toggleRuler() {
+    @objc func toggleRuler() {
         guard let panel = rulerPanel else { return }
         if panel.isVisible {
             panel.orderOut(nil)
@@ -130,22 +73,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func openPreferences() {
-        NSApp.activate(ignoringOtherApps: true)
-        if #available(macOS 13.0, *) {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } else {
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
+    @objc func openPreferences() {
+        // Handled by SwiftUI
     }
 }
 
 @main
 struct SnapFlowApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @Environment(\.openSettings) private var openSettings
+    @StateObject private var hotKeyManager = HotKeyManager.shared
     
     var body: some Scene {
-        // No main window — app runs entirely from the status bar menu
-        Settings { SettingsView() }
+        Settings {
+            SettingsView()
+        }
+        
+        MenuBarExtra("SnapFocus", systemImage: "bolt.horizontal.fill") {
+            VStack {
+                Text("SnapFocus")
+                Divider()
+                
+                Button(action: {
+                    appDelegate.toggleOrb()
+                }) {
+                    Label("Toggle AI Scheduler", systemImage: "bolt.fill")
+                }
+                .keyboardShortcut("S", modifiers: [.command, .shift])
+                
+                Button(action: {
+                    appDelegate.toggleRuler()
+                }) {
+                    Text("Show/Hide Ruler HUD")
+                }
+                .keyboardShortcut("H", modifiers: [.command, .shift])
+                
+                Divider()
+                
+                SettingsLink {
+                    Label("Settings ...", systemImage: "gearshape")
+                }
+                .keyboardShortcut(",", modifiers: .command)
+                
+                Divider()
+                
+                Button("Quit SnapFocus") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("Q", modifiers: .command)
+            }
+            .onReceive(hotKeyManager.$settingsTriggerPulse) { _ in
+                // We need to actually call openSettings from here
+                // However, openSettings is often not enough to bring it to front
+                // The native Cmd+, usually just works if Settings scene is present.
+                // But for global hotkeys, we pulse this.
+                // Since this closure runs when the pulse toggles, we try opening.
+                NSApp.activate(ignoringOtherApps: true)
+                try? openSettings()
+            }
+        }
     }
 }
