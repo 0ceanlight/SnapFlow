@@ -212,7 +212,7 @@ struct EventHoverPopover: View {
     let showNotes: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             if showTimes {
                 Text("\(event.startDate.formatted(date: .omitted, time: .shortened)) - \(event.endDate.formatted(date: .omitted, time: .shortened))")
                     .font(.headline)
@@ -224,7 +224,7 @@ struct EventHoverPopover: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding()
+        .padding(10)
         .frame(maxWidth: 300)
     }
 }
