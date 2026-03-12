@@ -15,6 +15,7 @@ struct RulerHUDView: View {
     @State private var lastExtractedEventID: String? = nil
     @State private var dragSelectRect: CGRect? = nil
     @State private var groupDragDelta: CGFloat = 0
+    @State private var eventColorCache: [String: Color] = [:]
 
     /// Owns the vertical scale value and the Cmd+/Cmd- key monitor.
     @StateObject private var scaleCtrl = ScaleController()
@@ -102,6 +103,10 @@ struct RulerHUDView: View {
             }
         }
         .onReceive(timer) { _ in now = Date() }
+        .onAppear { eventColorCache = computeEventColorMap(calendarManager.events) }
+        .onChange(of: calendarManager.events) { newEvents in
+            eventColorCache = computeEventColorMap(newEvents)
+        }
         .onCommand(#selector(NSResponder.moveUp(_:)))   { nudgeActive(by: +5) }
         .onCommand(#selector(NSResponder.moveDown(_:))) { nudgeActive(by: -5) }
         .focusable(true)
@@ -320,8 +325,8 @@ struct RulerHUDView: View {
 
     /// Greedy graph-coloring: no two overlapping or immediately adjacent events
     /// share the same palette color.
-    private var eventColorMap: [String: Color] {
-        let sorted = calendarManager.events.sorted { $0.startDate < $1.startDate }
+    private func computeEventColorMap(_ events: [EKEvent]) -> [String: Color] {
+        let sorted = events.sorted { $0.startDate < $1.startDate }
         var assignedIdx: [String: Int] = [:]
 
         for event in sorted {
@@ -348,7 +353,7 @@ struct RulerHUDView: View {
     }
 
     private func eventColor(_ event: EKEvent) -> Color {
-        eventColorMap[event.eventIdentifier] ?? Self.palette[0]
+        eventColorCache[event.eventIdentifier] ?? Self.palette[0]
     }
 
     private func openInCalendar(_ event: EKEvent) {

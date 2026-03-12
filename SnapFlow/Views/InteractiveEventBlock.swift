@@ -135,11 +135,11 @@ struct InteractiveEventBlock: View {
     private var showPopover: Binding<Bool> {
         Binding(
             get: {
-                if !isHoveringEvent { return false }
+                if isDragging || !isHoveringEvent { return false }
                 let hasNotes = event.notes != nil && !event.notes!.isEmpty
                 return hoverShowTimes || (hoverShowNotes && hasNotes)
             },
-            set: { isHoveringEvent = $0 }
+            set: { if !$0 { isHoveringEvent = false } }
         )
     }
 
@@ -162,7 +162,7 @@ struct InteractiveEventBlock: View {
                         .lineLimit(2)
                         .padding(.horizontal, 7).padding(.top, 3)
                 }
-                .highPriorityGesture(DragGesture(minimumDistance: 2)
+                .highPriorityGesture(DragGesture(minimumDistance: 1)
                     .onChanged { v in
                         withTransaction(Transaction(animation: nil)) {
                             isDragging = true
@@ -207,7 +207,7 @@ struct InteractiveEventBlock: View {
                         .onHover { hovering in
                             if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                         }
-                        .highPriorityGesture(DragGesture(minimumDistance: 2)
+                        .highPriorityGesture(DragGesture(minimumDistance: 0)
                             .onChanged { v in
                                 withTransaction(Transaction(animation: nil)) {
                                     isDragging = true
@@ -240,7 +240,7 @@ struct InteractiveEventBlock: View {
                         .onHover { hovering in
                             if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                         }
-                        .highPriorityGesture(DragGesture(minimumDistance: 2)
+                        .highPriorityGesture(DragGesture(minimumDistance: 0)
                             .onChanged { v in
                                 withTransaction(Transaction(animation: nil)) {
                                     isDragging = true
