@@ -91,8 +91,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let rulerItem = NSMenuItem(
             title: "Show/Hide Ruler HUD",
             action: #selector(toggleRuler),
-            keyEquivalent: ""
+            keyEquivalent: "H"
         )
+        rulerItem.keyEquivalentModifierMask = [.command, .shift]
         rulerItem.target = self
         menu.addItem(rulerItem)
 
