@@ -10,7 +10,6 @@ import Cocoa
 import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var preferencesWindow: NSWindow?
     var rulerPanel: NSPanel?
     var voiceOrbPanel: NSPanel?
     var cancellables = Set<AnyCancellable>()
@@ -79,10 +78,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Toggle Voice Orb / Scheduler
         let orbItem = NSMenuItem(
-            title: "Open Scheduler  ⌘⇧S",
+            title: "Toggle AI Scheduler",
             action: #selector(toggleOrb),
-            keyEquivalent: ""
+            keyEquivalent: "S"
         )
+        orbItem.keyEquivalentModifierMask = [.command, .shift]
+        orbItem.image = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)
         orbItem.target = self
         menu.addItem(orbItem)
 
@@ -97,12 +98,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // Preferences — avoid ⌘, since macOS hijacks it to trigger the Settings scene
+        // Settings
         let prefsItem = NSMenuItem(
-            title: "Preferences…",
+            title: "Settings ...",
             action: #selector(openPreferences),
-            keyEquivalent: ""
+            keyEquivalent: ","
         )
+        prefsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         prefsItem.target = self
         menu.addItem(prefsItem)
 
@@ -128,17 +130,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openPreferences() {
-        if preferencesWindow == nil {
-            let hostingController = NSHostingController(rootView: SettingsView())
-            let window = NSWindow(contentViewController: hostingController)
-            window.title = "SnapFocus Preferences"
-            window.styleMask = [.titled, .closable, .miniaturizable]
-            window.center()
-            window.isReleasedWhenClosed = false
-            preferencesWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        if #available(macOS 13.0, *) {
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        } else {
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
         }
-        preferencesWindow?.makeKeyAndOrderFront(nil)
-        preferencesWindow?.orderFrontRegardless()
     }
 }
 
@@ -148,7 +145,6 @@ struct SnapFlowApp: App {
     
     var body: some Scene {
         // No main window — app runs entirely from the status bar menu
-        // Preferences are opened manually via AppDelegate.openPreferences()
-        Settings { EmptyView() }
+        Settings { SettingsView() }
     }
 }
