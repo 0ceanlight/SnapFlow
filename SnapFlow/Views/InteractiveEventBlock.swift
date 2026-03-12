@@ -31,6 +31,7 @@ struct InteractiveEventBlock: View {
 
     @State private var moveOffset:   CGFloat = 0
     @State private var resizeOffset: CGFloat = 0
+    @State private var topResizeOffset: CGFloat = 0
     @State private var isDragging = false
     @State private var isHoveringEvent = false
 
@@ -101,6 +102,36 @@ struct InteractiveEventBlock: View {
         return max(floor, bestPts ?? rawPts)
     }
 
+    /// Snap a top-resize offset (pts, start-edge only) to nearby event edges.
+    private func snappedTopResizeOffset(_ rawPts: CGFloat, durationMins: CGFloat) -> CGFloat {
+        guard snappingEnabled else { return rawPts }
+        let rawSec    = TimeInterval(rawPts / pxPerMin * 60)
+        let candStart = event.startDate.addingTimeInterval(rawSec)
+        let threshold = TimeInterval(RulerHUDView.snapMarginMinutes * 60)
+        let minDurSec = TimeInterval(5 * 60)
+        var bestDist  = threshold
+        var bestPts: CGFloat? = nil
+
+        for other in allEvents {
+            guard other.eventIdentifier != event.eventIdentifier else { continue }
+            // start → other.start
+            let d1 = abs(candStart.timeIntervalSince(other.startDate))
+            let snapSec1 = other.startDate.timeIntervalSince(event.startDate)
+            if d1 < bestDist && event.endDate.timeIntervalSince(event.startDate) - snapSec1 >= minDurSec {
+                bestDist = d1; bestPts = CGFloat(snapSec1 / 60) * pxPerMin
+            }
+            // start → other.end
+            let d2 = abs(candStart.timeIntervalSince(other.endDate))
+            let snapSec2 = other.endDate.timeIntervalSince(event.startDate)
+            if d2 < bestDist && event.endDate.timeIntervalSince(event.startDate) - snapSec2 >= minDurSec {
+                bestDist = d2; bestPts = CGFloat(snapSec2 / 60) * pxPerMin
+            }
+        }
+        // Clamp roof: never shrink below 5 min
+        let roof = (durationMins - 5) * pxPerMin
+        return min(roof, bestPts ?? rawPts)
+    }
+
     private var showPopover: Binding<Bool> {
         Binding(
             get: {
@@ -115,11 +146,11 @@ struct InteractiveEventBlock: View {
     var body: some View {
         let startMins    = RulerHUDView.minutesFromMidnight(event.startDate)
         let durationMins = CGFloat(event.endDate.timeIntervalSince(event.startDate) / 60)
-        let blockH       = max(durationMins * pxPerMin + resizeOffset, 14)
-        let yOffset      = startMins * pxPerMin + (isSelected ? groupDragDelta : moveOffset)
+        let blockH       = max(durationMins * pxPerMin + resizeOffset - topResizeOffset, 14)
+        let yOffset      = startMins * pxPerMin + (isSelected ? groupDragDelta : moveOffset) + topResizeOffset
         let width        = containerWidth - leftInset - RulerHUDView.rightMargin
 
-        ZStack(alignment: .bottom) {
+        ZStack(alignment: .topLeading) {
             // Body
             RoundedRectangle(cornerRadius: 5)
                 .fill(isSelected ? color.adjusted(saturationDelta: selectedSaturationDelta, brightnessDelta: selectedBrightnessDelta).opacity(selectedOpacity) : color.opacity(isDragging ? selectedOpacity : unselectedOpacity))
@@ -167,32 +198,72 @@ struct InteractiveEventBlock: View {
                 }
                 .onTapGesture(count: 2) { onDoubleTap() }
                 .onTapGesture(count: 1) { onTap(NSEvent.modifierFlags) }
-
-            // Bottom resize handle
-            RoundedRectangle(cornerRadius: 3)
-                .fill(Color.white.opacity(0.4))
-                .frame(width: 28, height: 4)
-                .padding(.bottom, 3)
-                .contentShape(Rectangle().size(width: width, height: edgeHandleH))
-                .highPriorityGesture(DragGesture(minimumDistance: 2)
-                    .onChanged { v in
-                        withTransaction(Transaction(animation: nil)) {
-                            isDragging = true
-                            resizeOffset = max(-(durationMins - 5) * pxPerMin, v.translation.height)  // raw
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .frame(height: 6)
+                        .padding(.top, -2)
+                        .onHover { hovering in
+                            if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                         }
-                    }
-                    .onEnded { v in
-                        isDragging = false
-                        let raw = v.translation.height
-                        let snapped = snappedResizeOffset(raw, durationMins: durationMins)
-                        let isEventSnapped = abs(snapped - raw) > 0.5
-                        let finalPts = isEventSnapped ? snapped : max(-(durationMins - 5) * pxPerMin,
-                                                                      snapToFive(raw / pxPerMin) * pxPerMin)
-                        let delta = TimeInterval(finalPts / pxPerMin * 60)
-                        resizeOffset = 0
-                        onCommit(event.startDate, event.endDate.addingTimeInterval(delta))
-                    }
-                )
+                        .highPriorityGesture(DragGesture(minimumDistance: 2)
+                            .onChanged { v in
+                                withTransaction(Transaction(animation: nil)) {
+                                    isDragging = true
+                                    topResizeOffset = min((durationMins - 5) * pxPerMin, v.translation.height)
+                                }
+                            }
+                            .onEnded { v in
+                                isDragging = false
+                                let raw = v.translation.height
+                                let snapped = snappedTopResizeOffset(raw, durationMins: durationMins)
+                                let isEventSnapped = abs(snapped - raw) > 0.5
+                                let finalPts = isEventSnapped ? snapped : min((durationMins - 5) * pxPerMin,
+                                                                              snapToFive(raw / pxPerMin) * pxPerMin)
+                                let delta = TimeInterval(finalPts / pxPerMin * 60)
+                                topResizeOffset = 0
+                                let newStart = event.startDate.addingTimeInterval(delta)
+                                // Prevent dragging top handle below bottom handle
+                                if event.endDate.timeIntervalSince(newStart) >= 5 * 60 {
+                                    onCommit(newStart, event.endDate)
+                                }
+                            }
+                        )
+                }
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .frame(height: 6)
+                        .padding(.bottom, -2)
+                        .onHover { hovering in
+                            if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                        }
+                        .highPriorityGesture(DragGesture(minimumDistance: 2)
+                            .onChanged { v in
+                                withTransaction(Transaction(animation: nil)) {
+                                    isDragging = true
+                                    resizeOffset = max(-(durationMins - 5) * pxPerMin, v.translation.height)
+                                }
+                            }
+                            .onEnded { v in
+                                isDragging = false
+                                let raw = v.translation.height
+                                let snapped = snappedResizeOffset(raw, durationMins: durationMins)
+                                let isEventSnapped = abs(snapped - raw) > 0.5
+                                let finalPts = isEventSnapped ? snapped : max(-(durationMins - 5) * pxPerMin,
+                                                                              snapToFive(raw / pxPerMin) * pxPerMin)
+                                let delta = TimeInterval(finalPts / pxPerMin * 60)
+                                resizeOffset = 0
+                                let newEnd = event.endDate.addingTimeInterval(delta)
+                                // Prevent dragging bottom handle above top handle
+                                if newEnd.timeIntervalSince(event.startDate) >= 5 * 60 {
+                                    onCommit(event.startDate, newEnd)
+                                }
+                            }
+                        )
+                }
         }
         .frame(width: width, height: blockH)
         .offset(x: leftInset, y: yOffset)
