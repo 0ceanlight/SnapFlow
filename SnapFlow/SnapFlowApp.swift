@@ -89,7 +89,7 @@ struct SnapFlowApp: App {
             SettingsView()
         }
         
-        MenuBarExtra("SnapFocus", systemImage: "bolt.horizontal.fill") {
+        MenuBarExtra("SnapFocus", systemImage: "rays") {
             VStack {
                 Text("SnapFocus")
                 Divider()
