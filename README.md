@@ -1,8 +1,8 @@
-# SnapFocus
+# SnapFlow
 
 A lightweight macOS time-tracking sidebar that syncs with your calendar, visualizes your schedule in real-time, and keeps your current focus in view. A productivity HUD for people who want time to feel tangible.
 
-> **Note:** This project was created as part of the [**SIUE Hackathon 2026**](https://ehacks.cs.siue.edu/) in St. Louis. Watch the trailer [here](https://youtu.be/dDavFPFlbJc)!
+> **Note:** This project was created as part of the [**SIUE Hackathon 2026**](https://ehacks.cs.siue.edu/) in St. Louis. Watch the trailer [here](https://youtu.be/h4mTnchsRWY).
 
 ![Screenshot](./Thumbnail.png)
 
@@ -10,14 +10,14 @@ A lightweight macOS time-tracking sidebar that syncs with your calendar, visuali
 
 ## Features
 
-- **Real-Time Schedule Visualization:** An always-on-top sidebar that displays your calendar events for the day on a vertical timeline.
-- **Dynamic "Now" Indicator:** A clear line shows your current position in the day's schedule.
+- **Real-Time Schedule Visualization:** An always-on-top sidebar that displays your calendar events for the day on a vertical timeline, with customizable view.
+- **iCal Synchronized:** Synchronize this at-a-glance view with your existing calendar events, with seamless cross-updates.
 - **Interactive Time Shifting:**
-    - **Nudge:** Use keyboard shortcuts (`Up`/`Down` arrows) to extend or shorten the currently active task.
     - **Open in Calendar:** Click on an event to open it in Apple Calendar.
-    - **Resize or Move Events**: Super convenient resizing right from the expanded calendar view - just click and drag any event.
+    - **Resize or Move Events**: Super convenient resizing right from the expanded calendar view - just click and drag any event. Shifting events also works in multi-select mode.
 - **Agentic Scheduling with Gemini:** Use natural language to describe your tasks for the day (e.g., "work on my thesis for 3 hours and go for a run"), and let AI generate and save a detailed schedule directly to your calendar. This can be done both with voice recognition or text input.
-- **Customizable & Persistent Settings:** Configure your Gemini API key securely in the app's preferences.
+- **TODO Manager:** Hovering over upper part of ruler allows 
+- **Customizable & Persistent Settings:** Configure your Gemini API key securely in the app's preferences. See the settings window for further customization options.
 
 ## Getting Started
 
@@ -53,11 +53,17 @@ A lightweight macOS time-tracking sidebar that syncs with your calendar, visuali
 
 ## Usage
 
-- **Ruler Overlay:** The main timeline view appears on the left side of your screen. Hover over it to expand and see event details.
-- **Nudge Task:** While hovering over the ruler, use the `Up Arrow` and `Down Arrow` keys to adjust the duration of the currently active task.
+- **Ruler Overlay:** 
+    - The main timeline view appears on the left side of your screen. Hover over it to expand and see event details.
+    - Hover over a specific event to see its exact start/end time.
+    - With the ruler open, use cmd +/- to expand or shrink the sizing of the ruler to adjust for a larger overview vs. focus on short events.
+- **Move/Resize Events:**
+    - To resize an event, drag its top or bottom edge.
+    - To select one or multiple events for moving, you can use a normal click, or shift/cmd click to multi-select.
+    - Once events are selected, simply click and drag one of them to move the group.
+- **TODO Manager:** Hovering over upper part of ruler expands the TODO view, which allows users to edit and view TODO tasks for the currently active event. All TODOs are stored in the notes section of an event, so they can be edited both from within SnapFlow and iCal.
 - **Agentic Scheduler:**
-    - Open the scheduler window with `Cmd+Shift+S` or via `Show Agentic Scheduler` in the menu bar.
-- **Resize or Move Events**: Either click and drag an event to move it, or click and drag the bottom edge of an event to change its duration.
+    - Open the scheduler window with `Cmd+Shift+S` or via `Show Agentic Scheduler` in the menu bar. From here, you can also toggle between voice and keyboard input. 
 
 ## License
 
