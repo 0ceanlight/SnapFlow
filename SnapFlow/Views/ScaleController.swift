@@ -14,8 +14,8 @@ final class ScaleController: ObservableObject {
 
     @Published var scale: CGFloat = ScaleController.defaultScale
 
-    let min: CGFloat = 1.0   // whole 24h day fits in view
-    let max: CGFloat = 10.0
+    let minScale: CGFloat = 1.0
+    let maxScale: CGFloat = 10.0
     let step: CGFloat = 0.5
 
     private var monitor: Any?
@@ -31,14 +31,14 @@ final class ScaleController: ObservableObject {
             if ch == "+" || ch == "=" || key == 24 {   // Cmd+
                 DispatchQueue.main.async {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                        self.scale = Swift.min(self.max, self.scale + self.step)
+                        self.scale = min(self.maxScale, self.scale + self.step)
                     }
                 }
                 return nil
             } else if ch == "-" || key == 27 {          // Cmd-
                 DispatchQueue.main.async {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                        self.scale = Swift.max(self.min, self.scale - self.step)
+                        self.scale = max(self.minScale, self.scale - self.step)
                     }
                 }
                 return nil

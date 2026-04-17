@@ -3,59 +3,42 @@ import Combine
 
 class HotKeyManager: ObservableObject {
     static let shared = HotKeyManager()
-    
+
     @Published var isVoiceOrbVisible: Bool = false
-    
+
     var onToggleRuler: (() -> Void)?
-    var onOpenSettings: (() -> Void)?
     @Published var settingsTriggerPulse: Bool = false
-    
+
     private var globalMonitor: Any?
     private var localMonitor: Any?
-    
+
     private init() {}
-    
-    func setupHotkey() {
-        // Cmd + Shift + S
-        let schedulerMask: NSEvent.ModifierFlags = [.command, .shift]
-        let schedulerCode: UInt16 = 1 // S
-        
-        // Cmd + Shift + H
-        let rulerMask: NSEvent.ModifierFlags = [.command, .shift]
-        let rulerCode: UInt16 = 4 // H
-        
-        // Cmd + ,
-        let settingsMask: NSEvent.ModifierFlags = [.command]
-        let settingsCode: UInt16 = 43 // ,
-        
-        // Global monitor (when app is not active)
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if flags == schedulerMask && event.keyCode == schedulerCode {
-                self?.toggleVoiceOrb()
-            } else if flags == rulerMask && event.keyCode == rulerCode {
-                self?.onToggleRuler?()
-            } else if flags == settingsMask && event.keyCode == settingsCode {
-                self?.pulseSettings()
-                self?.onOpenSettings?()
-            }
+
+    // Returns true if the event was handled (consume it from local monitor).
+    @discardableResult
+    private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == [.command, .shift] && event.keyCode == 1 { // Cmd+Shift+S
+            toggleVoiceOrb()
+            return true
+        } else if flags == [.command, .shift] && event.keyCode == 4 { // Cmd+Shift+H
+            onToggleRuler?()
+            return true
+        } else if flags == .command && event.keyCode == 43 { // Cmd+,
+            pulseSettings()
+            return true
         }
-        
-        // Local monitor (when app is active)
+        return false
+    }
+
+    func setupHotkey() {
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKeyEvent(event)
+        }
+
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if flags == schedulerMask && event.keyCode == schedulerCode {
-                self?.toggleVoiceOrb()
-                return nil // consume event
-            } else if flags == rulerMask && event.keyCode == rulerCode {
-                self?.onToggleRuler?()
-                return nil
-            } else if flags == settingsMask && event.keyCode == settingsCode {
-                self?.pulseSettings()
-                self?.onOpenSettings?()
-                return nil
-            }
-            return event
+            guard let self else { return event }
+            return handleKeyEvent(event) ? nil : event
         }
     }
     

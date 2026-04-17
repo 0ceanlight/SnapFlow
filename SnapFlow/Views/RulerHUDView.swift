@@ -12,7 +12,7 @@ struct RulerHUDView: View {
     @State private var normalizedMouseY: CGFloat = 1.0  // 0=top, 1=bottom
 
     @State private var selectedEventIDs: Set<String> = []
-    @State private var lastExtractedEventID: String? = nil
+    @State private var selectionAnchorID: String? = nil
     @State private var dragSelectRect: CGRect? = nil
     @State private var groupDragDelta: CGFloat = 0
     @State private var eventColorCache: [String: Color] = [:]
@@ -132,7 +132,7 @@ struct RulerHUDView: View {
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selectedEventIDs.removeAll()
-                                lastExtractedEventID = nil
+                                selectionAnchorID = nil
                             }
                             .gesture(
                                 DragGesture(minimumDistance: 2)
@@ -162,7 +162,7 @@ struct RulerHUDView: View {
                                             selectedEventIDs.removeAll()
                                         }
                                         dragSelectRect = nil
-                                        lastExtractedEventID = nil
+                                        selectionAnchorID = nil
                                     }
                             )
                     }
@@ -264,7 +264,7 @@ struct RulerHUDView: View {
                             onTap: { modifiers in handleEventTap(event: event, modifiers: modifiers) },
                             onDragStartUnselected: {
                                 selectedEventIDs = [event.eventIdentifier]
-                                lastExtractedEventID = event.eventIdentifier
+                                selectionAnchorID = event.eventIdentifier
                             },
                             groupDragDelta: $groupDragDelta,
                             onCommit: { ns, ne in
@@ -379,8 +379,8 @@ struct RulerHUDView: View {
             } else {
                 selectedEventIDs.insert(event.eventIdentifier)
             }
-            lastExtractedEventID = event.eventIdentifier
-        } else if modifiers.contains(.shift), let lastID = lastExtractedEventID, let lastEvent = calendarManager.events.first(where: { $0.eventIdentifier == lastID }) {
+            selectionAnchorID = event.eventIdentifier
+        } else if modifiers.contains(.shift), let lastID = selectionAnchorID, let lastEvent = calendarManager.events.first(where: { $0.eventIdentifier == lastID }) {
             let rangeStart = min(lastEvent.startDate, event.startDate)
             let rangeEnd = max(lastEvent.endDate, event.endDate)
             
@@ -389,10 +389,10 @@ struct RulerHUDView: View {
                     selectedEventIDs.insert(e.eventIdentifier)
                 }
             }
-            lastExtractedEventID = event.eventIdentifier
+            selectionAnchorID = event.eventIdentifier
         } else {
             selectedEventIDs = [event.eventIdentifier]
-            lastExtractedEventID = event.eventIdentifier
+            selectionAnchorID = event.eventIdentifier
         }
     }
 }

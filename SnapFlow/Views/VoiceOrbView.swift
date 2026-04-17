@@ -121,9 +121,6 @@ struct VoiceOrbView: View {
             inputMode = defaultModeRaw == "keyboard" ? .keyboard : .voice
         }
         // Smart switch: if the user starts typing while orb has no voice content yet, jump to keyboard
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            // handled via keyDown below
-        }
         .onChange(of: hotkeyManager.isVoiceOrbVisible) { _, newValue in
             if newValue {
                 // Reset to default mode on open

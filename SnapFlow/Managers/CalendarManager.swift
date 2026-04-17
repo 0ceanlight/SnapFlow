@@ -23,10 +23,10 @@ class CalendarManager: ObservableObject {
     
     private var cancellables = Set<AnyCancellable>()
     private var refreshTimer: Timer?
-    
+
     private init() {
         checkPermissions()
-        
+
         NotificationCenter.default.publisher(for: .EKEventStoreChanged)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.fetchEvents() }
@@ -37,6 +37,10 @@ class CalendarManager: ObservableObject {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             DispatchQueue.main.async { self?.fetchEvents() }
         }
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
     }
     
     func checkPermissions() {
@@ -119,11 +123,16 @@ class CalendarManager: ObservableObject {
 
         let predicate = store.predicateForEvents(withStart: dayStart, end: dayEnd, calendars: [calendar])
         self.events   = store.events(matching: predicate).sorted { $0.startDate < $1.startDate }
-        let now2 = Date()
-        self.activeEvent = self.events.first(where: { $0.startDate <= now2 && $0.endDate >= now2 })
+        let now = Date()
+        self.activeEvent = self.events.first(where: { $0.startDate <= now && $0.endDate >= now })
     }
 
     // MARK: - TODO helpers
+
+    private static func isTodoLine(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.hasPrefix("- [ ] ") || t.hasPrefix("- [x] ")
+    }
 
     /// Parse `- [ ]` / `- [x]` lines from an event's notes.
     static func parseTodos(from notes: String) -> [TodoItem] {
@@ -141,18 +150,13 @@ class CalendarManager: ObservableObject {
     /// Rebuild the notes string with updated todos, preserving non-todo lines.
     func saveTodos(_ todos: [TodoItem], to event: EKEvent) {
         let existing = event.notes ?? ""
-        // Keep lines that are NOT todo lines
         let nonTodoLines = existing
             .components(separatedBy: "\n")
-            .filter { line in
-                let t = line.trimmingCharacters(in: .whitespaces)
-                return !t.hasPrefix("- [ ] ") && !t.hasPrefix("- [x] ")
-            }
-        // Rebuild: non-todo lines first, then only valid todos
+            .filter { !Self.isTodoLine($0) }
         let validTodos = todos.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let todoLines = validTodos.map { ($0.isCompleted ? "- [x] " : "- [ ] ") + $0.text }
-        let allLines  = nonTodoLines + todoLines
-        event.notes   = allLines.joined(separator: "\n")
+        event.notes = (nonTodoLines + todoLines)
+            .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try store.save(event, span: .thisEvent, commit: true)
@@ -165,57 +169,52 @@ class CalendarManager: ObservableObject {
     func nudgeEvent(event: EKEvent, byMinutes minutes: Int) {
         guard snapFocusCalendar != nil else { return }
         let offset = TimeInterval(minutes * 60)
-        
-        // Find index of the event
+
         guard let idx = events.firstIndex(where: { $0.eventIdentifier == event.eventIdentifier }) else { return }
-        
+
         var modifiedEvents: [EKEvent] = []
-        
-        // 1. Modify the target event end time (if extending or shortening duration)
-        // Wait, the prompt says: "If the active task is extended, it should dynamically push the start and end times of contiguously connected subsequent tasks"
-        // Let's modify the end time of the active task
+
         event.endDate = event.endDate.addingTimeInterval(offset)
         modifiedEvents.append(event)
-        
-        // 2. Cascade logic for connected events
-        // A "connected" event has a start time exactly equal to the previous event's end time (before modification).
+
         var currentEndTime = event.endDate
         var originalEndTimePreMod = event.endDate.addingTimeInterval(-offset)
-        
+
         for i in (idx + 1)..<events.count {
             let nextEvent = events[i]
-            
+
             // Check if it was connected to the ORIGINAL end time
             // We use a small tolerance (e.g. 1 second) due to Date precision
             if abs(nextEvent.startDate.timeIntervalSince(originalEndTimePreMod)) < 1.0 {
-                // It was connected! Push its start and end times.
                 originalEndTimePreMod = nextEvent.endDate
-                
+
                 nextEvent.startDate = currentEndTime
                 nextEvent.endDate = nextEvent.endDate.addingTimeInterval(offset)
-                
+
                 currentEndTime = nextEvent.endDate
                 modifiedEvents.append(nextEvent)
             } else {
-                // Chain broken, don't cascade further
                 break
             }
         }
-        
-        // 3. Batched saves to EKEventStore
+
         do {
-            for e in modifiedEvents {
-                try store.save(e, span: .thisEvent, commit: false)
-            }
-            try store.commit()
-            // Notification.Name.EKEventStoreChanged will fire and reload events automatically
+            try batchSave(modifiedEvents)
         } catch {
             print("Failed to save nudged events: \(error)")
-            // Optionally, rollback or reload to fix local state
             fetchEvents()
         }
     }
     
+    // MARK: - Private helpers
+
+    private func batchSave(_ events: [EKEvent]) throws {
+        for e in events {
+            try store.save(e, span: .thisEvent, commit: false)
+        }
+        try store.commit()
+    }
+
     // Helper to insert a single AI-generated task block
     func insertEvent(title: String, startDate: Date, durationMinutes: Int, notes: String) {
         guard let calendar = snapFocusCalendar else { return }
@@ -225,11 +224,36 @@ class CalendarManager: ObservableObject {
         event.startDate = startDate
         event.endDate = startDate.addingTimeInterval(TimeInterval(durationMinutes * 60))
         event.notes = notes
-        
         do {
             try store.save(event, span: .thisEvent, commit: true)
         } catch {
             print("Failed to insert AI event: \(error)")
+        }
+    }
+
+    struct EventParams {
+        let title: String
+        let startDate: Date
+        let durationMinutes: Int
+        let notes: String
+    }
+
+    // Bulk insert — one store commit for all events
+    func insertEvents(_ params: [EventParams]) {
+        guard let calendar = snapFocusCalendar else { return }
+        do {
+            for p in params {
+                let event = EKEvent(eventStore: store)
+                event.calendar = calendar
+                event.title = p.title
+                event.startDate = p.startDate
+                event.endDate = p.startDate.addingTimeInterval(TimeInterval(p.durationMinutes * 60))
+                event.notes = p.notes
+                try store.save(event, span: .thisEvent, commit: false)
+            }
+            try store.commit()
+        } catch {
+            print("Failed to insert AI events: \(error)")
         }
     }
 
@@ -248,24 +272,18 @@ class CalendarManager: ObservableObject {
 
     // Batch move events
     func moveEvents(eventIDs: Set<String>, delta: TimeInterval) {
-        var modifiedEvents: [EKEvent] = []
-        
-        for id in eventIDs {
-            if let event = events.first(where: { $0.eventIdentifier == id }) {
-                event.startDate = event.startDate.addingTimeInterval(delta)
-                event.endDate = event.endDate.addingTimeInterval(delta)
-                modifiedEvents.append(event)
-            }
+        let index = Dictionary(uniqueKeysWithValues: events.map { ($0.eventIdentifier, $0) })
+        let modifiedEvents: [EKEvent] = eventIDs.compactMap { id in
+            guard let event = index[id] else { return nil }
+            event.startDate = event.startDate.addingTimeInterval(delta)
+            event.endDate   = event.endDate.addingTimeInterval(delta)
+            return event
         }
-        
+
         guard !modifiedEvents.isEmpty else { return }
-        
+
         do {
-            for e in modifiedEvents {
-                try store.save(e, span: .thisEvent, commit: false)
-            }
-            try store.commit()
-            // Data will be reloaded implicitly by EKEventStoreChanged notification
+            try batchSave(modifiedEvents)
         } catch {
             print("Failed to save batched events: \(error)")
             fetchEvents()

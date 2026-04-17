@@ -13,28 +13,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var rulerPanel: NSPanel?
     var voiceOrbPanel: NSPanel?
     var cancellables = Set<AnyCancellable>()
-    var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Run in background (removes Dock icon)
         NSApp.setActivationPolicy(.accessory)
 
-        // Setup global hotkey
         HotKeyManager.shared.onToggleRuler = { [weak self] in
             self?.toggleRuler()
         }
-        HotKeyManager.shared.onOpenSettings = { [weak self] in
-            // This is handled by SwiftUI observer now, but we keep the logic here for the menu item
-            // or we delegate it to the MenuBarExtra buttons.
-        }
         HotKeyManager.shared.setupHotkey()
 
-        // Setup Ruler HUD panel — 250 wide (expanded), positioned flush to left edge
         let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
         let contentRect = NSRect(x: 0, y: 0, width: 250, height: screenHeight)
         let panel = FloatingPanel(contentRect: contentRect, content: RulerHUDView())
 
-        // Flush to the very left edge of the screen (x = screen.minX, no gap)
         if let screen = NSScreen.main {
             panel.setFrameOrigin(NSPoint(x: screen.frame.minX, y: screen.frame.minY))
         }
@@ -42,7 +33,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFront(nil)
         self.rulerPanel = panel
 
-        // Setup Voice Orb Panel
         let orbRect = NSRect(x: 0, y: 0, width: 300, height: 300)
         let orbPanel = FloatingPanel(contentRect: orbRect, content: VoiceOrbView())
         orbPanel.center()
@@ -73,9 +63,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func openPreferences() {
-        // Handled by SwiftUI
-    }
 }
 
 @main
@@ -123,11 +110,6 @@ struct SnapFlowApp: App {
                 .keyboardShortcut("Q", modifiers: .command)
             }
             .onReceive(hotKeyManager.$settingsTriggerPulse) { _ in
-                // We need to actually call openSettings from here
-                // However, openSettings is often not enough to bring it to front
-                // The native Cmd+, usually just works if Settings scene is present.
-                // But for global hotkeys, we pulse this.
-                // Since this closure runs when the pulse toggles, we try opening.
                 NSApp.activate(ignoringOtherApps: true)
                 try? openSettings()
             }
