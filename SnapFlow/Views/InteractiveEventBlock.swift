@@ -162,7 +162,7 @@ struct InteractiveEventBlock: View {
                         .lineLimit(2)
                         .padding(.horizontal, 7).padding(.top, 3)
                 }
-                .highPriorityGesture(DragGesture(minimumDistance: 1)
+                .highPriorityGesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("canvas"))
                     .onChanged { v in
                         withTransaction(Transaction(animation: nil)) {
                             isDragging = true
@@ -207,7 +207,7 @@ struct InteractiveEventBlock: View {
                         .onHover { hovering in
                             if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                         }
-                        .highPriorityGesture(DragGesture(minimumDistance: 0)
+                        .highPriorityGesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("canvas"))
                             .onChanged { v in
                                 withTransaction(Transaction(animation: nil)) {
                                     isDragging = true
@@ -240,7 +240,7 @@ struct InteractiveEventBlock: View {
                         .onHover { hovering in
                             if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                         }
-                        .highPriorityGesture(DragGesture(minimumDistance: 0)
+                        .highPriorityGesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("canvas"))
                             .onChanged { v in
                                 withTransaction(Transaction(animation: nil)) {
                                     isDragging = true

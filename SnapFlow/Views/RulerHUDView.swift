@@ -194,6 +194,7 @@ struct RulerHUDView: View {
                 }
                 .frame(width: isHovering ? expandedWidth : collapsedWidth,
                        height: canvasHeight)
+                .coordinateSpace(name: "canvas")
             }
             .onAppear { proxy.scrollTo("nowLine", anchor: .center) }
         }
