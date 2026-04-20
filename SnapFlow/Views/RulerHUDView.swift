@@ -3,6 +3,24 @@ import EventKit
 import AppKit
 import Combine
 
+// MARK: - NSScrollView bridge
+
+/// Invisible helper that grabs a reference to the enclosing NSScrollView
+/// so we can adjust the scroll offset when zoom changes.
+private struct ScrollViewBridge: NSViewRepresentable {
+    var onReady: (NSScrollView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero)
+        DispatchQueue.main.async {
+            if let sv = v.enclosingScrollView { onReady(sv) }
+        }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 // MARK: - RulerHUDView
 
 struct RulerHUDView: View {
@@ -16,6 +34,7 @@ struct RulerHUDView: View {
     @State private var dragSelectRect: CGRect? = nil
     @State private var groupDragDelta: CGFloat = 0
     @State private var eventColorCache: [String: Color] = [:]
+    @State private var nsScrollView: NSScrollView?
 
     /// Owns the vertical scale value and the Cmd+/Cmd- key monitor.
     @StateObject private var scaleCtrl = ScaleController()
@@ -121,6 +140,10 @@ struct RulerHUDView: View {
             ScrollView(showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
 
+                    // ── NSScrollView bridge (invisible) ──────────────────────
+                    ScrollViewBridge { sv in nsScrollView = sv }
+                        .frame(width: 0, height: 0)
+
                     // ── Collapsed: thin gray bar (full width of the 10pt strip) ──
                     if !isHovering {
                         Color.gray.opacity(0.30)
@@ -197,6 +220,17 @@ struct RulerHUDView: View {
                 .coordinateSpace(name: "canvas")
             }
             .onAppear { proxy.scrollTo("nowLine", anchor: .center) }
+            .onChange(of: scaleCtrl.scale) { oldScale, newScale in
+                // Adjust scroll offset so the "Now" line stays at the same
+                // screen position. Both the scale change and the offset change
+                // are instant (same run-loop iteration) → no drift.
+                guard let sv = nsScrollView else { return }
+                let nowMins = Self.minutesFromMidnight(now)
+                let oldOffset = sv.contentView.bounds.origin.y
+                let newOffset = oldOffset + nowMins * (newScale - oldScale)
+                sv.contentView.setBoundsOrigin(NSPoint(x: 0, y: newOffset))
+                sv.reflectScrolledClipView(sv.contentView)
+            }
         }
     }
 

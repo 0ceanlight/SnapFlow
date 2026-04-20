@@ -5,11 +5,9 @@ import Combine
 // MARK: - ScaleController
 
 /// Holds the vertical zoom level and owns the NSEvent key monitor.
-/// A class (ObservableObject) is used so the monitor closure can safely
-/// capture `self` by reference and mutate state without SwiftUI struct-copy issues.
+/// Scale changes are instant (no animation) so the caller can adjust
+/// the scroll offset atomically, keeping the "Now" line stable on screen.
 final class ScaleController: ObservableObject {
-    /// The default vertical scale (zoom level) on launch.
-    /// 1.0 = entire 24h day fits in view. Larger values = more zoomed in.
     static let defaultScale: CGFloat = 1.5
 
     @Published var scale: CGFloat = ScaleController.defaultScale
@@ -28,18 +26,14 @@ final class ScaleController: ObservableObject {
             guard cmd else { return event }
             let key = event.keyCode
             let ch  = event.charactersIgnoringModifiers ?? ""
-            if ch == "+" || ch == "=" || key == 24 {   // Cmd+
+            if ch == "+" || ch == "=" || key == 24 {
                 DispatchQueue.main.async {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                        self.scale = min(self.maxScale, self.scale + self.step)
-                    }
+                    self.scale = min(self.maxScale, self.scale + self.step)
                 }
                 return nil
-            } else if ch == "-" || key == 27 {          // Cmd-
+            } else if ch == "-" || key == 27 {
                 DispatchQueue.main.async {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                        self.scale = max(self.minScale, self.scale - self.step)
-                    }
+                    self.scale = max(self.minScale, self.scale - self.step)
                 }
                 return nil
             }
