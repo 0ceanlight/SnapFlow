@@ -21,6 +21,31 @@ private struct ScrollViewBridge: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+// MARK: - Zoom ↔ scroll sync
+
+/// Called by SwiftUI on every animation frame with the interpolated scale.
+/// Adjusts the NSScrollView offset so the "Now" line stays at a fixed screen position.
+private struct ZoomScrollSyncer: AnimatableModifier {
+    var scale: CGFloat
+    let nowMins: CGFloat
+    let anchorScrollOffset: CGFloat
+    let anchorScale: CGFloat
+    let scrollView: NSScrollView?
+
+    var animatableData: CGFloat {
+        get { scale }
+        set {
+            scale = newValue
+            guard let sv = scrollView else { return }
+            let newOffset = anchorScrollOffset + nowMins * (newValue - anchorScale)
+            sv.contentView.setBoundsOrigin(NSPoint(x: 0, y: max(0, newOffset)))
+            sv.reflectScrolledClipView(sv.contentView)
+        }
+    }
+
+    func body(content: Content) -> some View { content }
+}
+
 // MARK: - RulerHUDView
 
 struct RulerHUDView: View {
@@ -141,7 +166,10 @@ struct RulerHUDView: View {
                 ZStack(alignment: .topLeading) {
 
                     // ── NSScrollView bridge (invisible) ──────────────────────
-                    ScrollViewBridge { sv in nsScrollView = sv }
+                    ScrollViewBridge { sv in
+                        nsScrollView = sv
+                        scaleCtrl.scrollView = sv
+                    }
                         .frame(width: 0, height: 0)
 
                     // ── Collapsed: thin gray bar (full width of the 10pt strip) ──
@@ -218,19 +246,15 @@ struct RulerHUDView: View {
                 .frame(width: isHovering ? expandedWidth : collapsedWidth,
                        height: canvasHeight)
                 .coordinateSpace(name: "canvas")
+                .modifier(ZoomScrollSyncer(
+                    scale: pxPerMin,
+                    nowMins: Self.minutesFromMidnight(now),
+                    anchorScrollOffset: scaleCtrl.anchorScrollOffset,
+                    anchorScale: scaleCtrl.anchorScale,
+                    scrollView: nsScrollView
+                ))
             }
             .onAppear { proxy.scrollTo("nowLine", anchor: .center) }
-            .onChange(of: scaleCtrl.scale) { oldScale, newScale in
-                // Adjust scroll offset so the "Now" line stays at the same
-                // screen position. Both the scale change and the offset change
-                // are instant (same run-loop iteration) → no drift.
-                guard let sv = nsScrollView else { return }
-                let nowMins = Self.minutesFromMidnight(now)
-                let oldOffset = sv.contentView.bounds.origin.y
-                let newOffset = oldOffset + nowMins * (newScale - oldScale)
-                sv.contentView.setBoundsOrigin(NSPoint(x: 0, y: newOffset))
-                sv.reflectScrolledClipView(sv.contentView)
-            }
         }
     }
 
